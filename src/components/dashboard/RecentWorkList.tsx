@@ -37,7 +37,7 @@ const mockData: RecentWork[] = [
 
 export default function RecentWorkList() {
   return (
-    <div className="bg-white rounded-[5px] px-6 py-5 shadow-sm">
+    <div className="bg-white rounded-[5px] px-6 py-5 shadow-sm h-full">
       {/* 헤더 */}
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-[16px] font-bold text-[#003478]">
@@ -50,7 +50,7 @@ export default function RecentWorkList() {
 
       {/* 컬럼 헤더 */}
       <div className="grid grid-cols-[1fr_90px_60px_40px] items-center gap-4 py-2 border-b border-gray-200">
-        <span className="text-xs text-center text-[#8492a6]">파일 이름</span>
+        <span className="text-xs text-left text-[#8492a6] pl-2">파일 이름</span>
         <span className="text-xs text-center text-[#8492a6]">상태</span>
         <span className="text-xs text-center text-[#8492a6] ">용량</span>
         <span className="text-xs text-center  text-[#8492a6]">활동</span>
