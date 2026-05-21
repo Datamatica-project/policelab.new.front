@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, Folder, Share2, LogOut, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
+import Image from "next/image";
 
 const navItems = [
   { label: "대시보드", href: "/dashboard", icon: LayoutDashboard },
@@ -15,13 +16,11 @@ export default function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="w-[190px] min-h-screen bg-[#1B2860] flex flex-col shrink-0">
+    <aside className="w-[220px] min-h-screen bg-[#1B1B4B] flex flex-col shrink-0">
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-5 py-6">
-        <div className="w-8 h-8 bg-yellow-400 rounded-lg flex items-center justify-center shrink-0">
-          <Shield size={16} className="text-[#1B2860]" />
-        </div>
-        <span className="text-white font-semibold text-sm leading-tight">
+        <Image src="/policeLogo.png" alt="로고" width={45} height={45} />
+        <span className="text-white font-semibold text-m leading-tight">
           비식별 엔진
         </span>
       </div>
@@ -29,8 +28,7 @@ export default function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 px-3 space-y-0.5">
         {navItems.map(({ label, href, icon: Icon }) => {
-          const isActive =
-            pathname === href || pathname.startsWith(href + "/");
+          const isActive = pathname === href || pathname.startsWith(href + "/");
           return (
             <Link
               key={href}
@@ -38,11 +36,14 @@ export default function Sidebar() {
               className={cn(
                 "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors",
                 isActive
-                  ? "bg-[#2B3D8A] text-white font-medium"
-                  : "text-white/60 hover:text-white hover:bg-white/10"
+                  ? "bg-[#062864] text-white font-medium border-l-3 border-[#FBC707]"
+                  : "text-white/60 hover:text-white hover:bg-white/10",
               )}
             >
-              <Icon size={16} />
+              <Icon
+                size={16}
+                className={cn(isActive ? "text-[#FBC707]" : "inherit")}
+              />
               {label}
             </Link>
           );

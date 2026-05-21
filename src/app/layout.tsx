@@ -10,8 +10,8 @@ const notoSansKR = Noto_Sans_KR({
 });
 
 export const metadata: Metadata = {
-  title: "비식별 엔진",
-  description: "교통사고 현장데이터 공유시스템",
+  title: "POLICELAB",
+  description: "지능형 교통사고 현장 데이터 분석 플랫폼",
 };
 
 export default function RootLayout({
