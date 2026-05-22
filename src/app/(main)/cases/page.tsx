@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -10,12 +10,15 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import CaseCard from "@/components/cases/CaseCard";
-import { CaseStatus } from "@/components/cases/CaseStatusBadge";
+import { ALL_CASES } from "@/lib/case-data";
+import type { CaseStatus } from "@/lib/case-data";
+
+const PER_PAGE = 12;
 
 const SEARCH_FIELD_LABELS: Record<string, string> = {
   title: "제목",
-  description: "내용",
   manager: "담당자",
+  all: "전체 항목",
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -23,93 +26,110 @@ const STATUS_LABELS: Record<string, string> = {
   검토중: "검토중",
   진행중: "진행중",
   사건종료: "사건종료",
-  사건완료: "사건완료",
 };
 
 const SORT_LABELS: Record<string, string> = {
   latest: "최신순",
   oldest: "오래된순",
+  title: "제목순",
 };
-
-interface Case {
-  id: string;
-  status: CaseStatus;
-  title: string;
-  description: string;
-  manager: string;
-  date: string;
-}
-
-const MOCK_CASES: Case[] = [
-  { id: "1", status: "검토중", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-  { id: "2", status: "진행중", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-  { id: "3", status: "사건종료", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-  { id: "4", status: "사건완료", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-  { id: "5", status: "진행중", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-  { id: "6", status: "진행중", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-  { id: "7", status: "사건종료", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-  { id: "8", status: "사건완료", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-  { id: "9", status: "진행중", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-  { id: "10", status: "진행중", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-  { id: "11", status: "사건종료", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-  { id: "12", status: "사건완료", title: "성남시 분당구 사건", description: "성남시 분당구의 사건파일 입니다.", manager: "홍길동 경감", date: "2026-03-31" },
-];
-
-const TOTAL_PAGES = 10;
 
 export default function CasesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchField, setSearchField] = useState("title");
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortOrder, setSortOrder] = useState("latest");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
+  const resetPage = () => setCurrentPage(1);
+
+  const filtered = useMemo(() => {
+    let cases = [...ALL_CASES];
+    const q = searchQuery.toLowerCase().trim();
+    if (q) {
+      cases = cases.filter((c) => {
+        if (searchField === "title") return c.title.toLowerCase().includes(q);
+        if (searchField === "manager") return c.manager.toLowerCase().includes(q);
+        return (
+          c.title.toLowerCase().includes(q) ||
+          c.description.toLowerCase().includes(q) ||
+          c.manager.toLowerCase().includes(q)
+        );
+      });
+    }
+    if (statusFilter !== "all") {
+      cases = cases.filter((c) => c.status === (statusFilter as CaseStatus));
+    }
+    if (sortOrder === "oldest") {
+      cases.sort((a, b) => a.date.localeCompare(b.date));
+    } else if (sortOrder === "title") {
+      cases.sort((a, b) => a.title.localeCompare(b.title));
+    } else {
+      cases.sort((a, b) => b.date.localeCompare(a.date));
+    }
+    return cases;
+  }, [searchQuery, searchField, statusFilter, sortOrder]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
+  const page = Math.min(currentPage, totalPages);
+  const pageCases = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
+  const pageNumbers = useMemo(() => {
+    const count = Math.min(10, totalPages);
+    const start = Math.max(1, Math.min(page - 4, totalPages - count + 1));
+    return Array.from({ length: count }, (_, i) => start + i);
+  }, [page, totalPages]);
+
   return (
-    <div>
-      <h1 className="text-[36px] font-bold text-[#003478]">사건관리</h1>
-      <p className="text-[18px] text-[#585858] mt-1">
+    <div className="pb-10">
+      <h1 className="text-[32px] font-extrabold text-[#1f2330] tracking-[-0.02em] mb-2">
+        사건관리
+      </h1>
+      <p className="text-[14.5px] text-[#6b7388] mb-[26px]">
         사건 단위로 자료를 관리할 수 있습니다.
       </p>
 
-      {/* 검색 및 필터 */}
-      <div className="flex items-center gap-2 mt-6">
-        <div className="relative flex-1 max-w-[480px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-[#9CA3AF]" />
+      {/* Filter row */}
+      <div className="flex items-center gap-3 mb-6 flex-wrap">
+        <div className="relative flex-1 min-w-[240px] max-w-[380px]">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-[#9aa1b3]" />
           <input
             type="text"
             placeholder="Search redacted cases..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className={cn(
-              "w-full h-9 pl-9 pr-3 text-sm",
-              "border border-[#E5E7EB] rounded-lg outline-none",
-              "placeholder:text-[#9CA3AF]",
-              "focus:border-[#003478] focus:ring-2 focus:ring-[#003478]/20",
-              "bg-[#F5F6FA]",
-            )}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              resetPage();
+            }}
+            className="w-full pl-[38px] pr-3 py-[10px] border border-[#e2e5ec] rounded-[8px] bg-white text-[13.5px] text-[#3a4055] outline-none focus:border-[#2b3f6c] placeholder:text-[#9aa1b3]"
           />
         </div>
 
         <Select
           value={searchField}
-          onValueChange={(v) => v && setSearchField(v)}
+          onValueChange={(v) => {
+            if (v) { setSearchField(v); resetPage(); }
+          }}
         >
-          <SelectTrigger className="w-[88px] bg-[#F5F6FA]">
+          <SelectTrigger className="w-[100px] border-[#e2e5ec] bg-white text-[13.5px] text-[#3a4055] rounded-[8px] h-[42px]">
             <span>{SEARCH_FIELD_LABELS[searchField]}</span>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="title">제목</SelectItem>
-            <SelectItem value="description">내용</SelectItem>
             <SelectItem value="manager">담당자</SelectItem>
+            <SelectItem value="all">전체 항목</SelectItem>
           </SelectContent>
         </Select>
 
+        <div className="w-px h-[22px] bg-[#e2e5ec]" />
+
         <Select
           value={statusFilter}
-          onValueChange={(v) => v && setStatusFilter(v)}
+          onValueChange={(v) => {
+            if (v) { setStatusFilter(v); resetPage(); }
+          }}
         >
-          <SelectTrigger className="w-[88px] bg-[#F5F6FA]">
+          <SelectTrigger className="w-[100px] border-[#e2e5ec] bg-white text-[13.5px] text-[#3a4055] rounded-[8px] h-[42px]">
             <span>{STATUS_LABELS[statusFilter]}</span>
           </SelectTrigger>
           <SelectContent>
@@ -117,70 +137,69 @@ export default function CasesPage() {
             <SelectItem value="검토중">검토중</SelectItem>
             <SelectItem value="진행중">진행중</SelectItem>
             <SelectItem value="사건종료">사건종료</SelectItem>
-            <SelectItem value="사건완료">사건완료</SelectItem>
           </SelectContent>
         </Select>
 
-        <Select value={sortOrder} onValueChange={(v) => v && setSortOrder(v)}>
-          <SelectTrigger className="w-[100px] bg-[#F5F6FA]">
+        <Select
+          value={sortOrder}
+          onValueChange={(v) => {
+            if (v) { setSortOrder(v); resetPage(); }
+          }}
+        >
+          <SelectTrigger className="w-[110px] border-[#e2e5ec] bg-white text-[13.5px] text-[#3a4055] rounded-[8px] h-[42px]">
             <span>{SORT_LABELS[sortOrder]}</span>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="latest">최신순</SelectItem>
             <SelectItem value="oldest">오래된순</SelectItem>
+            <SelectItem value="title">제목순</SelectItem>
           </SelectContent>
         </Select>
       </div>
 
-      {/* 사건 그리드 */}
-      <div className="grid grid-cols-4 gap-4 mt-6">
-        {MOCK_CASES.map((c) => (
-          <CaseCard
-            key={c.id}
-            {...c}
-            selected={selectedId === c.id}
-            onClick={() => setSelectedId(c.id === selectedId ? null : c.id)}
-          />
+      {/* Cards grid */}
+      <div className="grid grid-cols-4 gap-[18px] mb-9">
+        {pageCases.map((c) => (
+          <CaseCard key={c.id} {...c} />
         ))}
+        {pageCases.length === 0 && (
+          <div className="col-span-4 text-center py-16 text-[#9aa1b3] text-[13.5px]">
+            조건에 맞는 사건이 없습니다.
+          </div>
+        )}
       </div>
 
-      {/* 페이지네이션 */}
-      <div className="flex items-center justify-center gap-1 mt-8">
+      {/* Pagination */}
+      <div className="flex items-center justify-center gap-[6px] py-2 pb-4">
         <button
           onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-          disabled={currentPage === 1}
-          className={cn(
-            "size-8 flex items-center justify-center rounded border text-[#6B7280]",
-            "border-[#E5E7EB] hover:bg-[#F5F6FA] disabled:opacity-40 disabled:cursor-not-allowed",
-          )}
+          disabled={page === 1}
+          className="min-w-[34px] h-[34px] px-[10px] border border-[#e2e5ec] rounded-[6px] bg-white text-[#6b7388] flex items-center justify-center hover:border-[#c5cbd9] hover:bg-[#f7f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
-          <ChevronLeft className="size-4" />
+          <ChevronLeft size={14} />
         </button>
 
-        {Array.from({ length: TOTAL_PAGES }, (_, i) => i + 1).map((page) => (
+        {pageNumbers.map((n) => (
           <button
-            key={page}
-            onClick={() => setCurrentPage(page)}
+            key={n}
+            onClick={() => setCurrentPage(n)}
             className={cn(
-              "size-8 flex items-center justify-center rounded border text-sm font-medium",
-              page === currentPage
-                ? "bg-[#003478] border-[#003478] text-white"
-                : "border-[#E5E7EB] text-[#374151] hover:bg-[#F5F6FA]",
+              "min-w-[34px] h-[34px] px-[10px] border rounded-[6px] text-[13px] font-medium flex items-center justify-center transition-colors",
+              n === page
+                ? "bg-[#1d2c4e] border-[#1d2c4e] text-white"
+                : "bg-white border-[#e2e5ec] text-[#3a4055] hover:border-[#c5cbd9] hover:bg-[#f7f8fb]",
             )}
           >
-            {page}
+            {n}
           </button>
         ))}
 
         <button
-          onClick={() => setCurrentPage((p) => Math.min(TOTAL_PAGES, p + 1))}
-          disabled={currentPage === TOTAL_PAGES}
-          className={cn(
-            "size-8 flex items-center justify-center rounded border text-[#6B7280]",
-            "border-[#E5E7EB] hover:bg-[#F5F6FA] disabled:opacity-40 disabled:cursor-not-allowed",
-          )}
+          onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+          disabled={page === totalPages}
+          className="min-w-[34px] h-[34px] px-[10px] border border-[#e2e5ec] rounded-[6px] bg-white text-[#6b7388] flex items-center justify-center hover:border-[#c5cbd9] hover:bg-[#f7f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
-          <ChevronRight className="size-4" />
+          <ChevronRight size={14} />
         </button>
       </div>
     </div>

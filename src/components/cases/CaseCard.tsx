@@ -1,74 +1,71 @@
-import { MoreVertical, User, Calendar } from "lucide-react";
-import { cn } from "@/lib/utils";
-import CaseStatusBadge, { CaseStatus } from "./CaseStatusBadge";
+"use client";
 
-interface CaseCardProps {
-  id: string;
-  status: CaseStatus;
-  title: string;
-  description: string;
-  manager: string;
-  date: string;
+import { MoreVertical, User, Calendar } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { cn } from "@/lib/utils";
+import CaseStatusBadge from "./CaseStatusBadge";
+import type { CaseData } from "@/lib/case-data";
+
+interface CaseCardProps extends CaseData {
   selected?: boolean;
-  onClick?: () => void;
-  onMoreClick?: () => void;
 }
 
 export default function CaseCard({
+  id,
   status,
   title,
   description,
   manager,
   date,
   selected,
-  onClick,
-  onMoreClick,
 }: CaseCardProps) {
+  const router = useRouter();
+
   return (
     <div
       className={cn(
-        "bg-white rounded-xl flex flex-col p-4 cursor-pointer min-h-[190px]",
-        "transition-shadow",
+        "bg-white rounded-[10px] flex flex-col p-[18px] cursor-pointer min-h-[200px]",
+        "transition-all duration-150",
         selected
-          ? "border-2 border-[#003478] shadow-md"
-          : "border border-[#E5E7EB] hover:shadow-sm",
+          ? "border-[1.5px] border-[#1d2c4e] shadow-[0_4px_16px_rgba(29,44,78,0.10)]"
+          : "border border-[#e6e8ef] hover:border-[#c5cbd9] hover:shadow-[0_4px_14px_rgba(15,22,40,0.04)]",
       )}
-      onClick={onClick}
+      onClick={() => router.push(`/cases/${id}`)}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between mb-[14px]">
         <CaseStatusBadge status={status} />
         <button
-          className="text-[#9CA3AF] hover:text-[#6B7280] p-0.5"
-          onClick={(e) => {
-            e.stopPropagation();
-            onMoreClick?.();
-          }}
+          className="w-6 h-6 flex items-center justify-center text-[#9aa1b3] rounded hover:bg-[#f3f4f8] hover:text-[#3a4055]"
+          onClick={(e) => e.stopPropagation()}
         >
-          <MoreVertical className="size-4" />
+          <MoreVertical size={14} />
         </button>
       </div>
 
-      <div className="mt-3">
-        <h3 className="text-[15px] font-bold text-[#111827]">{title}</h3>
-        <p className="text-[13px] text-[#6B7280] mt-1">{description}</p>
-      </div>
+      <h3 className="text-[17px] font-bold text-[#1f2330] leading-[1.3] tracking-[-0.01em] mb-[6px]">
+        {title}
+      </h3>
+      <p className="text-[13px] text-[#8a93a8] leading-[1.5] mb-[18px]">
+        {description}
+      </p>
 
-      <div className="flex-1" />
-
-      <div className="flex items-end justify-between mt-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-1.5 text-[13px] text-[#6B7280]">
-            <User className="size-3.5 shrink-0" />
+      <div className="mt-auto border-t border-[#eef0f5] pt-[12px] flex justify-between items-end gap-[10px]">
+        <div className="flex flex-col gap-[6px]">
+          <div className="flex items-center gap-[6px] text-[12.5px] text-[#6b7388]">
+            <User size={12} className="shrink-0 text-[#8a93a8]" />
             <span>{manager}</span>
           </div>
-          <div className="flex items-center gap-1.5 text-[13px] text-[#6B7280]">
-            <Calendar className="size-3.5 shrink-0" />
+          <div className="flex items-center gap-[6px] text-[12.5px] text-[#6b7388]">
+            <Calendar size={12} className="shrink-0 text-[#8a93a8]" />
             <span>{date}</span>
           </div>
         </div>
         <button
-          className="px-4 py-2 bg-[#003478] text-white text-sm font-medium rounded-lg hover:bg-[#002a63] transition-colors"
-          onClick={(e) => e.stopPropagation()}
+          className="px-[14px] py-[7px] bg-[#1d2c4e] text-white text-[12px] font-semibold rounded-[5px] shrink-0 hover:bg-[#2b3f6c] transition-colors"
+          onClick={(e) => {
+            e.stopPropagation();
+            router.push(`/cases/${id}`);
+          }}
         >
           더보기
         </button>

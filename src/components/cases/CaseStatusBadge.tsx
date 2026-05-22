@@ -1,16 +1,17 @@
-export type CaseStatus = "검토중" | "진행중" | "사건종료" | "사건완료";
+export type { CaseStatus } from "@/lib/case-data";
 
-const statusStyles: Record<CaseStatus, string> = {
-  검토중: "bg-[#374151] text-white",
-  진행중: "bg-[#2563EB] text-white",
-  사건종료: "bg-[#EF4444] text-white",
-  사건완료: "bg-[#DC2626] text-white",
+import type { CaseStatus } from "@/lib/case-data";
+
+const STATUS_STYLES: Record<CaseStatus, string> = {
+  검토중: "bg-[#1d2c4e] text-white",
+  진행중: "bg-[#2b6cb0] text-white",
+  사건종료: "bg-[#d33b3b] text-white",
 };
 
 export default function CaseStatusBadge({ status }: { status: CaseStatus }) {
   return (
     <span
-      className={`inline-flex items-center justify-center px-2.5 py-1 rounded text-xs font-medium ${statusStyles[status]}`}
+      className={`inline-flex items-center px-[10px] py-[5px] rounded text-[11.5px] font-bold tracking-[0.01em] ${STATUS_STYLES[status]}`}
     >
       {status}
     </span>
