@@ -35,16 +35,9 @@ interface CompressedFile extends UploadedFile {
 interface Props {
   caseName: string;
   officer: string;
-  policy: string;
   files: UploadedFile[];
   manualBoxes: Record<number, BBox[]>;
 }
-
-const POLICY_LABELS: Record<string, string> = {
-  standard: "표준 보관 (90일)",
-  internal: "내부 보관",
-  critical: "중요 보관",
-};
 
 const MOSAIC_BOX_STYLE: React.CSSProperties = {
   position: "absolute",
@@ -115,7 +108,7 @@ function PreviewModal({
 }
 
 /* ── Main Component ── */
-export default function Step3Complete({ caseName, officer, policy, files, manualBoxes }: Props) {
+export default function Step3Complete({ caseName, officer, files, manualBoxes }: Props) {
   const [carouselStart, setCarouselStart] = useState(0);
   const [previewFile, setPreviewFile] = useState<CompressedFile | null>(null);
 
@@ -137,8 +130,6 @@ export default function Step3Complete({ caseName, officer, policy, files, manual
 
   const canNext = carouselStart + 3 < compressed.length;
   const canPrev = carouselStart > 0;
-
-  const policyLabel = POLICY_LABELS[policy] ?? policy;
 
   return (
     <div className="flex flex-col gap-[22px]">
@@ -255,7 +246,6 @@ export default function Step3Complete({ caseName, officer, policy, files, manual
               { k: "생성 날짜", v: "2026년 5월 22일" },
               { k: "사건 담당자", v: `${officer} 순경` },
               { k: "처리 완료", v: "2026.05.22 14:35" },
-              { k: "보관 정책", v: policyLabel },
               { k: "파일 개수", v: `${compressed.length}개` },
               { k: "원본 용량", v: `${totalOriginal.toFixed(2)} MB` },
               { k: "압축 후", v: `${totalAfter.toFixed(2)} MB` },
