@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { LayoutDashboard, Folder, Share2, LogOut, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Image from "next/image";
+import { useAuthStore } from "@/store/authStore";
 
 const navItems = [
   { label: "대시보드", href: "/dashboard", icon: LayoutDashboard },
@@ -14,6 +15,12 @@ const navItems = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { logout } = useAuthStore();
+
+  const handleLogout = () => {
+    logout();
+    window.location.replace("/login");
+  };
 
   return (
     <aside className="w-[220px] min-h-screen bg-[#1B1B4B] flex flex-col shrink-0">
@@ -52,7 +59,10 @@ export default function Sidebar() {
 
       {/* Logout */}
       <div className="px-3 pb-6">
-        <button className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-white/50 hover:text-white hover:bg-white/10 w-full transition-colors">
+        <button
+          onClick={handleLogout}
+          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-white/50 hover:text-white hover:bg-white/10 w-full transition-colors"
+        >
           <LogOut size={16} />
           로그아웃
         </button>
