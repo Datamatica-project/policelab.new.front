@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useMemo, useEffect } from "react";
+import { useState, useRef, useMemo, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   CloudUpload,
@@ -22,6 +22,14 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { PostCase, PostFiles, type FileUploadResult, type Detection } from "@/lib/api";
+import {
+  saveCaseSession,
+  loadCaseSession,
+  clearCaseSession,
+  saveOriginalFiles,
+  loadOriginalFiles,
+  clearOriginalFiles,
+} from "@/lib/caseSession";
 import CompareScene from "@/components/cases/CompareScene";
 import ManualEditModal, { type BBox } from "@/components/cases/ManualEditModal";
 import Step3Complete from "@/components/cases/Step3Complete";
@@ -29,7 +37,7 @@ import Step3Complete from "@/components/cases/Step3Complete";
 /* ─────────────────── types ─────────────────── */
 interface UploadedFile {
   id: number;
-  file: File;
+  file: File | null; // null while loading from IndexedDB after page refresh
   name: string;
   sizeMB: number;
   seed: number;
@@ -105,6 +113,14 @@ const MOSAIC_BOX_STYLE: React.CSSProperties = {
   borderRadius: 2,
 };
 
+const DETECT_BOX_STYLE: React.CSSProperties = {
+  position: "absolute",
+  pointerEvents: "none",
+  backgroundColor: "rgba(59,130,246,0.08)",
+  border: "2px solid #3b82f6",
+  borderRadius: 2,
+};
+
 /* ─────────────────── StepIndicator ─────────── */
 function StepIndicator({ step }: { step: 1 | 2 | 3 | 4 }) {
   const steps = [
@@ -152,6 +168,151 @@ function StepIndicator({ step }: { step: 1 | 2 | 3 | 4 }) {
   );
 }
 
+/* ─────────────────── Image Compare Slider ───── */
+function ImageCompareSlider({
+  originalUrl,
+  mosaicUrl,
+  panelStyle,
+  imgNaturalSize,
+  onNaturalSize,
+  autoDetections,
+  manualBoxes,
+  seed,
+}: {
+  originalUrl: string | null;
+  mosaicUrl: string | null;
+  panelStyle: React.CSSProperties;
+  imgNaturalSize: { w: number; h: number } | null;
+  onNaturalSize: (size: { w: number; h: number }) => void;
+  autoDetections: Detection[];
+  manualBoxes: BBox[];
+  seed: number;
+}) {
+  const [sliderPct, setSliderPct] = useState(50);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isDragging = useRef(false);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isDragging.current || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const pct = Math.max(2, Math.min(98, ((e.clientX - rect.left) / rect.width) * 100));
+    setSliderPct(pct);
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    isDragging.current = false;
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [handleMouseMove, handleMouseUp]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative w-full overflow-hidden rounded-[6px] bg-[#f5f6fa] select-none"
+      style={{ ...panelStyle, cursor: "col-resize" }}
+      onClick={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        setSliderPct(Math.max(2, Math.min(98, ((e.clientX - rect.left) / rect.width) * 100)));
+      }}
+    >
+      {/* 모자이크 후 이미지 (풀 사이즈, 아래 레이어) */}
+      {mosaicUrl ? (
+        <img
+          src={mosaicUrl}
+          alt="모자이크 후"
+          className="absolute inset-0 w-full h-full pointer-events-none"
+          style={{ objectFit: "fill" }}
+          onLoad={(e) => {
+            const img = e.currentTarget;
+            onNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+          }}
+        />
+      ) : (
+        <div className="absolute inset-0 pointer-events-none">
+          <CompareScene mosaic variant={seed} />
+        </div>
+      )}
+
+      {/* 탐지/수동 박스 (윤곽선만 표시) */}
+      {imgNaturalSize &&
+        autoDetections.map((det, i) => {
+          const [x1, y1, x2, y2] = det.expanded_box_xyxy;
+          return (
+            <div
+              key={`auto-${i}`}
+              style={{
+                ...DETECT_BOX_STYLE,
+                left: `${(x1 / imgNaturalSize.w) * 100}%`,
+                top: `${(y1 / imgNaturalSize.h) * 100}%`,
+                width: `${((x2 - x1) / imgNaturalSize.w) * 100}%`,
+                height: `${((y2 - y1) / imgNaturalSize.h) * 100}%`,
+              }}
+            />
+          );
+        })}
+      {manualBoxes.map((b) => (
+        <div
+          key={b.id}
+          style={{
+            ...DETECT_BOX_STYLE,
+            left: `${b.x}%`,
+            top: `${b.y}%`,
+            width: `${b.w}%`,
+            height: `${b.h}%`,
+          }}
+        />
+      ))}
+
+      {/* 원본 이미지 (슬라이더 왼쪽만 clip, 위 레이어) */}
+      {(originalUrl || mosaicUrl) && (
+        <img
+          src={originalUrl ?? mosaicUrl!}
+          alt="원본"
+          className="absolute inset-0 w-full h-full pointer-events-none"
+          style={{
+            objectFit: "fill",
+            clipPath: `inset(0 ${100 - sliderPct}% 0 0)`,
+          }}
+        />
+      )}
+
+      {/* 슬라이더 바 + 핸들 */}
+      <div
+        className="absolute top-0 bottom-0 z-10"
+        style={{ left: `${sliderPct}%`, transform: "translateX(-50%)", pointerEvents: "none" }}
+      >
+        <div className="w-[2px] h-full bg-white" style={{ boxShadow: "0 0 6px rgba(0,0,0,0.35)" }} />
+        <button
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-9 h-9 bg-white rounded-full flex items-center justify-center shadow-[0_2px_12px_rgba(0,0,0,0.22)] hover:scale-110 transition-transform"
+          style={{ cursor: "ew-resize", pointerEvents: "auto" }}
+          onMouseDown={(e) => {
+            isDragging.current = true;
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+        >
+          <ArrowLeftRight size={13} className="text-[#1d2c4e]" />
+        </button>
+      </div>
+
+      {/* 코너 레이블 */}
+      <span className="absolute top-2.5 left-3 z-10 pointer-events-none bg-black/50 text-white text-[11px] font-semibold px-2 py-[3px] rounded-[4px]">
+        원본
+      </span>
+      <span className="absolute top-2.5 right-3 z-10 pointer-events-none bg-black/50 text-white text-[11px] font-semibold px-2 py-[3px] rounded-[4px]">
+        모자이크 후
+      </span>
+    </div>
+  );
+}
+
 /* ─────────────────── Step 3 Main ────────────── */
 function Step3Main({
   data,
@@ -169,13 +330,23 @@ function Step3Main({
   const fileBoxes = file ? (manualBoxes[file.id] ?? []) : [];
   const detectCount = (uploadResult?.detectionCount ?? (file ? 2 + (file.seed % 4) : 0)) + fileBoxes.length;
   const [imgNaturalSize, setImgNaturalSize] = useState<{ w: number; h: number } | null>(null);
+  const [originalUrl, setOriginalUrl] = useState<string | null>(null);
 
   useEffect(() => {
     setImgNaturalSize(null);
   }, [file?.id]);
 
+  useEffect(() => {
+    if (!file?.file) {
+      setOriginalUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(file.file);
+    setOriginalUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file?.id, file?.file]);
+
   const displayName = uploadResult?.originalFileName ?? file?.name ?? "—";
-  const isProcessing = uploadResult?.processingQueued ?? false;
 
   const avgConfidence = uploadResult && uploadResult.detections.length > 0
     ? uploadResult.detections.reduce((s, d) => s + d.confidence, 0) / uploadResult.detections.length
@@ -195,8 +366,12 @@ function Step3Main({
             <h3 className="text-[17px] font-bold text-[#1f2330] tracking-[-0.01em]">
               이미지 비교
             </h3>
-            <p className="text-[13px] text-[#6b7388] mt-1">
-              자동 모자이크 처리 결과를 확인하고 필요한 경우 수동 수정을 진행하세요.
+            <p className="text-[12.5px] text-[#6b7388] mt-[3px] truncate">{displayName}</p>
+            <p className="text-[11.5px] text-[#9aa1b3] mt-[2px]">
+              가운데 바를 좌우로 드래그해 원본/모자이크를 비교하세요
+              {!originalUrl && uploadResult?.storageUrl && (
+                <span className="ml-1.5 text-[#f0a500]">원본 파일 없음 — 새로고침 시 원본 표시 불가</span>
+              )}
             </p>
           </div>
           {file && (
@@ -209,97 +384,16 @@ function Step3Main({
           )}
         </div>
 
-        <div className="grid grid-cols-2 relative">
-          {/* 원본 */}
-          <div className="px-4 pt-1">
-            <p className="text-[14px] font-bold text-[#1f2330] mb-1">모자이크 작업 전 (원본)</p>
-            <p className="text-[12.5px] text-[#6b7388] mb-3 truncate">{displayName}</p>
-            <div className="w-full bg-[#f5f6fa] rounded-[6px] overflow-hidden relative" style={panelStyle}>
-              {uploadResult?.storageUrl ? (
-                <img
-                  src={uploadResult.storageUrl}
-                  alt="원본"
-                  className="absolute inset-0 w-full h-full"
-                  style={{ objectFit: "fill" }}
-                />
-              ) : (
-                <CompareScene mosaic={false} variant={file?.seed ?? 0} />
-              )}
-            </div>
-          </div>
-
-          {/* 자동 처리 결과 */}
-          <div className="px-4 pt-1 border-l border-[#e6e8ef]">
-            <p className="text-[14px] font-bold text-[#1f2330] mb-1">모자이크 작업 후 (자동 처리)</p>
-            <p className="text-[12.5px] text-[#6b7388] mb-3 truncate">{displayName}</p>
-            <div className="w-full bg-[#f5f6fa] rounded-[6px] overflow-hidden relative" style={panelStyle}>
-              {uploadResult?.storageUrl ? (
-                <>
-                  <img
-                    src={uploadResult.storageUrl}
-                    alt="처리됨"
-                    className="absolute inset-0 w-full h-full"
-                    style={{ objectFit: "fill" }}
-                    onLoad={(e) => {
-                      const img = e.currentTarget;
-                      setImgNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
-                    }}
-                  />
-                  {/* 자동 탐지 박스 (expanded_box_xyxy → 퍼센트 변환) */}
-                  {imgNaturalSize &&
-                    uploadResult.detections.map((det, i) => {
-                      const [x1, y1, x2, y2] = det.expanded_box_xyxy;
-                      return (
-                        <div
-                          key={`auto-${i}`}
-                          style={{
-                            ...MOSAIC_BOX_STYLE,
-                            left: `${(x1 / imgNaturalSize.w) * 100}%`,
-                            top: `${(y1 / imgNaturalSize.h) * 100}%`,
-                            width: `${((x2 - x1) / imgNaturalSize.w) * 100}%`,
-                            height: `${((y2 - y1) / imgNaturalSize.h) * 100}%`,
-                          }}
-                        />
-                      );
-                    })}
-                  {/* 수동 추가 박스 */}
-                  {fileBoxes.map((b) => (
-                    <div
-                      key={b.id}
-                      style={{
-                        ...MOSAIC_BOX_STYLE,
-                        left: `${b.x}%`,
-                        top: `${b.y}%`,
-                        width: `${b.w}%`,
-                        height: `${b.h}%`,
-                      }}
-                    />
-                  ))}
-                </>
-              ) : (
-                <div className="w-full h-full relative">
-                  <CompareScene mosaic variant={file?.seed ?? 0} />
-                  {fileBoxes.map((b) => (
-                    <div
-                      key={b.id}
-                      style={{
-                        ...MOSAIC_BOX_STYLE,
-                        left: `${b.x}%`,
-                        top: `${b.y}%`,
-                        width: `${b.w}%`,
-                        height: `${b.h}%`,
-                      }}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-7 bg-white border border-[#d9deea] rounded-full flex items-center justify-center shadow-sm z-10 text-[#6b7388]">
-            <ArrowLeftRight size={12} />
-          </div>
-        </div>
+        <ImageCompareSlider
+          originalUrl={originalUrl}
+          mosaicUrl={uploadResult?.storageUrl ?? null}
+          panelStyle={panelStyle}
+          imgNaturalSize={imgNaturalSize}
+          onNaturalSize={setImgNaturalSize}
+          autoDetections={uploadResult?.detections ?? []}
+          manualBoxes={fileBoxes}
+          seed={file?.seed ?? 0}
+        />
 
         <div className="grid grid-cols-3 bg-[#f7f8fb] border border-[#eef0f5] rounded-[8px] mt-[18px] overflow-hidden">
           {/* 탐지된 영역 수 */}
@@ -544,6 +638,49 @@ export default function NewCasePage() {
     [files, selectedFileId],
   );
 
+  // 페이지 진입 시 sessionStorage에서 복원 (새로고침 대응)
+  useEffect(() => {
+    const session = loadCaseSession();
+    if (!session) return;
+
+    setCaseNumber(session.caseNumber);
+    setCaseName(session.caseName);
+    setRank(session.rank);
+    setOfficer(session.officer);
+    setDesc(session.desc);
+    setCreatedCaseId(session.caseId);
+    setManualBoxes(session.manualBoxes);
+
+    const restoredFiles: UploadedFile[] = session.files.map((f) => ({ ...f, file: null }));
+    setFiles(restoredFiles);
+    setSelectedFileId(restoredFiles[0]?.id ?? null);
+    setStep(session.step);
+
+    // 원본 파일 IndexedDB에서 비동기 복원
+    loadOriginalFiles(session.caseId, session.files.map((f) => f.id)).then((fileMap) => {
+      setFiles((prev) => prev.map((f) => ({ ...f, file: fileMap.get(f.id) ?? null })));
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // step 3/4 진입 이후 상태 변경 시 sessionStorage 갱신
+  useEffect(() => {
+    if ((step !== 3 && step !== 4) || !createdCaseId) return;
+    saveCaseSession({
+      caseId: String(createdCaseId),
+      step,
+      caseNumber,
+      caseName,
+      rank,
+      officer,
+      desc,
+      files: files.map(({ id, name, sizeMB, seed, category, tags, policy, description, uploadResult }) => ({
+        id, name, sizeMB, seed, category, tags, policy, description, uploadResult,
+      })),
+      manualBoxes,
+    });
+  }, [step, manualBoxes, files, createdCaseId, caseNumber, caseName, rank, officer, desc]);
+
   const formData: CaseFormData = { caseNumber, caseName, rank, officer, desc, files };
 
   const isStep2Ready =
@@ -609,7 +746,7 @@ export default function NewCasePage() {
       setCreatedCaseId(caseId);
 
       const uploadResults = await PostFiles(
-        files.map((f) => f.file),
+        files.map((f) => f.file as File),
         files.map((f) => ({
           storageType: f.policy === "internal" ? "NAS" : "S3",
           description: f.description,
@@ -619,10 +756,16 @@ export default function NewCasePage() {
         })),
       );
 
-      setFiles((prev) =>
-        prev.map((f, i) => ({ ...f, uploadResult: uploadResults[i] })),
-      );
+      const updatedFiles = files.map((f, i) => ({ ...f, uploadResult: uploadResults[i] }));
+      setFiles(updatedFiles);
       setSelectedFileId(files[0]?.id ?? null);
+
+      // 원본 파일 → IndexedDB, 나머지 → sessionStorage (새로고침 대응)
+      await saveOriginalFiles(
+        caseId,
+        files.map((f) => ({ id: f.id, file: f.file as File })),
+      );
+
       setStep(3);
     } catch {
       toast.error("사건 생성에 실패했습니다. 다시 시도해주세요.");
@@ -631,7 +774,13 @@ export default function NewCasePage() {
     }
   };
 
-  const handleFinish = () => router.push("/cases");
+  const handleFinish = () => {
+    if (createdCaseId) {
+      clearCaseSession();
+      clearOriginalFiles(String(createdCaseId), files.map((f) => f.id));
+    }
+    router.push("/cases");
+  };
 
   const STEP_LABELS: Record<number, string> = {
     1: "사건 정보",
