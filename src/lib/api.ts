@@ -25,13 +25,16 @@ export const MosaicApi = axios.create({
   baseURL: process.env.NEXT_PUBLIC_MOSAIC_API_URL,
 });
 
-AuthApi.interceptors.request.use((config) => {
+const attachToken = (config: Parameters<Parameters<typeof AuthApi.interceptors.request.use>[0]>[0]) => {
   const token = getAuthStore?.().token;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
-});
+};
+
+AuthApi.interceptors.request.use(attachToken);
+ImageApi.interceptors.request.use(attachToken);
 
 AuthApi.interceptors.response.use(
   (response) => response,
@@ -68,4 +71,72 @@ export const PostLogin = async (email: string, password: string) => {
     resultMessage: string;
     data: { accessToken: string; email: string };
   };
+};
+
+export interface CreateCasePayload {
+  caseNumber: string;
+  title: string;
+  description: string;
+  occurredAt: string;
+  assignedTo: string;
+}
+
+export interface CaseResponse {
+  caseId: string;
+  caseNumber: string;
+  title: string;
+  description: string;
+  occurredAt: string;
+  assignedTo: string;
+  createdBy: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  fileCount: number;
+  sharedWith: string[];
+}
+
+export const PostCase = async (payload: CreateCasePayload): Promise<CaseResponse> => {
+  const response = await ImageApi.post("/api/cases", payload);
+  return response.data;
+};
+
+export interface FileUploadMetadata {
+  storageType: "S3" | "NAS";
+  description: string;
+  categoryName: string;
+  tags: string[];
+  caseId: string;
+}
+
+export interface Detection {
+  class_name: string;
+  confidence: number;
+  box_xyxy: [number, number, number, number];
+  expanded_box_xyxy: [number, number, number, number];
+}
+
+export interface FileUploadResult {
+  fileId: string;
+  fileName: string;
+  originalFileName: string;
+  fileSize: number;
+  contentType: string;
+  storageType: string;
+  storagePath: string;
+  storageUrl: string;
+  tags: string[];
+  uploadedAt: string | null;
+  detectionCount: number;
+  detections: Detection[];
+  processingQueued: boolean;
+}
+
+export const PostFiles = async (files: File[], metadataList: FileUploadMetadata[]): Promise<FileUploadResult[]> => {
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+  formData.append("metadata", JSON.stringify(metadataList));
+
+  const response = await ImageApi.post("/api/files/upload", formData);
+  return response.data;
 };

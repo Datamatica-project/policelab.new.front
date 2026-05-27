@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useMemo } from "react";
+import { useState, useRef, useMemo, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   CloudUpload,
@@ -8,7 +8,6 @@ import {
   ClipboardList,
   Info,
   Server,
-  Lock,
   X,
   ChevronDown,
   ChevronLeft,
@@ -18,9 +17,11 @@ import {
   Target,
   Clock,
   Tag,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { PostCase, PostFiles, type FileUploadResult, type Detection } from "@/lib/api";
 import CompareScene from "@/components/cases/CompareScene";
 import ManualEditModal, { type BBox } from "@/components/cases/ManualEditModal";
 import Step3Complete from "@/components/cases/Step3Complete";
@@ -28,6 +29,7 @@ import Step3Complete from "@/components/cases/Step3Complete";
 /* ─────────────────── types ─────────────────── */
 interface UploadedFile {
   id: number;
+  file: File;
   name: string;
   sizeMB: number;
   seed: number;
@@ -35,6 +37,7 @@ interface UploadedFile {
   tags: string[];
   policy: string;
   description: string;
+  uploadResult?: FileUploadResult;
 }
 
 interface CaseFormData {
@@ -56,10 +59,32 @@ const CATEGORY_OPTIONS = [
 ];
 
 const POLICY_OPTIONS = [
-  { value: "standard", label: "표준 보관", desc: "외부 클라우드에 저장", Icon: CloudUpload },
-  { value: "internal", label: "내부 보관", desc: "내부 서버에 안전하게 저장", Icon: Server },
-  { value: "critical", label: "중요 보관", desc: "이중 저장으로 데이터 보호 강화", Icon: Lock },
+  { value: "standard", label: "표준 보관", desc: "외부 클라우드(S3)에 저장", Icon: CloudUpload },
+  { value: "internal", label: "내부 보관", desc: "내부 서버(NAS)에 안전하게 저장", Icon: Server },
 ];
+
+const CLASS_LABELS: Record<string, string> = {
+  face: "얼굴",
+  license_plate: "번호판",
+};
+
+function groupDetections(detections: Detection[]) {
+  const map = new Map<string, { count: number; maxConf: number }>();
+  for (const det of detections) {
+    const prev = map.get(det.class_name);
+    if (prev) {
+      prev.count += 1;
+      prev.maxConf = Math.max(prev.maxConf, det.confidence);
+    } else {
+      map.set(det.class_name, { count: 1, maxConf: det.confidence });
+    }
+  }
+  return Array.from(map.entries()).map(([key, { count, maxConf }]) => ({
+    label: CLASS_LABELS[key] ?? key,
+    count,
+    maxConf,
+  }));
+}
 
 const TODAY = new Date().toLocaleDateString("ko-KR", {
   year: "numeric",
@@ -140,11 +165,27 @@ function Step3Main({
   onManualEdit: (f: UploadedFile) => void;
 }) {
   const file = selectedFile ?? data.files[0] ?? null;
+  const uploadResult = file?.uploadResult;
   const fileBoxes = file ? (manualBoxes[file.id] ?? []) : [];
-  const autoCount = file ? 2 + (file.seed % 4) : 0;
-  const detectCount = autoCount + fileBoxes.length;
-  const seconds = file ? 5 + (file.seed % 10) : 0;
-  const timeStr = `00:00:${String(seconds).padStart(2, "0")}`;
+  const detectCount = (uploadResult?.detectionCount ?? (file ? 2 + (file.seed % 4) : 0)) + fileBoxes.length;
+  const [imgNaturalSize, setImgNaturalSize] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    setImgNaturalSize(null);
+  }, [file?.id]);
+
+  const displayName = uploadResult?.originalFileName ?? file?.name ?? "—";
+  const isProcessing = uploadResult?.processingQueued ?? false;
+
+  const avgConfidence = uploadResult && uploadResult.detections.length > 0
+    ? uploadResult.detections.reduce((s, d) => s + d.confidence, 0) / uploadResult.detections.length
+    : null;
+
+  const seedVal = file?.seed ?? 0;
+  const timeStr = `00:00:${String(5 + (seedVal % 10)).padStart(2, "0")}`;
+  const panelStyle: React.CSSProperties = {
+    aspectRatio: imgNaturalSize ? `${imgNaturalSize.w} / ${imgNaturalSize.h}` : "4/3",
+  };
 
   return (
     <div className="flex flex-col gap-[18px]">
@@ -168,57 +209,149 @@ function Step3Main({
           )}
         </div>
 
-        <div className="grid grid-cols-2 relative overflow-hidden">
+        <div className="grid grid-cols-2 relative">
+          {/* 원본 */}
           <div className="px-4 pt-1">
             <p className="text-[14px] font-bold text-[#1f2330] mb-1">모자이크 작업 전 (원본)</p>
-            <p className="text-[12.5px] text-[#6b7388] mb-3">{file?.name ?? "—"}</p>
-            <div className="w-full aspect-[4/3] bg-[#f5f6fa] rounded-[6px] overflow-hidden relative">
-              <CompareScene mosaic={false} variant={file?.seed ?? 0} />
+            <p className="text-[12.5px] text-[#6b7388] mb-3 truncate">{displayName}</p>
+            <div className="w-full bg-[#f5f6fa] rounded-[6px] overflow-hidden relative" style={panelStyle}>
+              {uploadResult?.storageUrl ? (
+                <img
+                  src={uploadResult.storageUrl}
+                  alt="원본"
+                  className="absolute inset-0 w-full h-full"
+                  style={{ objectFit: "fill" }}
+                />
+              ) : (
+                <CompareScene mosaic={false} variant={file?.seed ?? 0} />
+              )}
             </div>
           </div>
+
+          {/* 자동 처리 결과 */}
           <div className="px-4 pt-1 border-l border-[#e6e8ef]">
             <p className="text-[14px] font-bold text-[#1f2330] mb-1">모자이크 작업 후 (자동 처리)</p>
-            <p className="text-[12.5px] text-[#6b7388] mb-3">{file?.name ?? "—"}</p>
-            <div className="w-full aspect-[4/3] bg-[#f5f6fa] rounded-[6px] overflow-hidden relative">
-              <div className="w-full h-full relative">
-                <CompareScene mosaic variant={file?.seed ?? 0} />
-                {fileBoxes.map((b) => (
-                  <div
-                    key={b.id}
-                    style={{
-                      ...MOSAIC_BOX_STYLE,
-                      left: `${b.x}%`,
-                      top: `${b.y}%`,
-                      width: `${b.w}%`,
-                      height: `${b.h}%`,
+            <p className="text-[12.5px] text-[#6b7388] mb-3 truncate">{displayName}</p>
+            <div className="w-full bg-[#f5f6fa] rounded-[6px] overflow-hidden relative" style={panelStyle}>
+              {uploadResult?.storageUrl ? (
+                <>
+                  <img
+                    src={uploadResult.storageUrl}
+                    alt="처리됨"
+                    className="absolute inset-0 w-full h-full"
+                    style={{ objectFit: "fill" }}
+                    onLoad={(e) => {
+                      const img = e.currentTarget;
+                      setImgNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
                     }}
                   />
-                ))}
-              </div>
+                  {/* 자동 탐지 박스 (expanded_box_xyxy → 퍼센트 변환) */}
+                  {imgNaturalSize &&
+                    uploadResult.detections.map((det, i) => {
+                      const [x1, y1, x2, y2] = det.expanded_box_xyxy;
+                      return (
+                        <div
+                          key={`auto-${i}`}
+                          style={{
+                            ...MOSAIC_BOX_STYLE,
+                            left: `${(x1 / imgNaturalSize.w) * 100}%`,
+                            top: `${(y1 / imgNaturalSize.h) * 100}%`,
+                            width: `${((x2 - x1) / imgNaturalSize.w) * 100}%`,
+                            height: `${((y2 - y1) / imgNaturalSize.h) * 100}%`,
+                          }}
+                        />
+                      );
+                    })}
+                  {/* 수동 추가 박스 */}
+                  {fileBoxes.map((b) => (
+                    <div
+                      key={b.id}
+                      style={{
+                        ...MOSAIC_BOX_STYLE,
+                        left: `${b.x}%`,
+                        top: `${b.y}%`,
+                        width: `${b.w}%`,
+                        height: `${b.h}%`,
+                      }}
+                    />
+                  ))}
+                </>
+              ) : (
+                <div className="w-full h-full relative">
+                  <CompareScene mosaic variant={file?.seed ?? 0} />
+                  {fileBoxes.map((b) => (
+                    <div
+                      key={b.id}
+                      style={{
+                        ...MOSAIC_BOX_STYLE,
+                        left: `${b.x}%`,
+                        top: `${b.y}%`,
+                        width: `${b.w}%`,
+                        height: `${b.h}%`,
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           </div>
+
           <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-7 h-7 bg-white border border-[#d9deea] rounded-full flex items-center justify-center shadow-sm z-10 text-[#6b7388]">
             <ArrowLeftRight size={12} />
           </div>
         </div>
 
         <div className="grid grid-cols-3 bg-[#f7f8fb] border border-[#eef0f5] rounded-[8px] mt-[18px] overflow-hidden">
-          {[
-            { icon: <Target size={13} />, label: "탐지된 영역 수", value: `${detectCount}개` },
-            { icon: <Clock size={13} />, label: "처리 시간", value: timeStr },
-            { icon: <Clock size={13} />, label: "처리 상태", value: null, badge: "자동 처리 완료" },
-          ].map(({ icon, label, value, badge }, i) => (
-            <div key={label} className={cn("py-[18px] px-5 text-center", i < 2 && "border-r border-[#eef0f5]")}>
-              <div className="flex items-center justify-center gap-[6px] text-[12.5px] text-[#6b7388] font-medium mb-2">
-                {icon}{label}
-              </div>
-              {badge ? (
-                <span className="inline-block bg-[#e3f4ea] text-[#1f7a47] font-bold text-[12.5px] px-3 py-[5px] rounded-[6px]">{badge}</span>
-              ) : (
-                <div className="text-[22px] font-extrabold text-[#1f2330] tracking-[-0.01em]">{value}</div>
-              )}
+          {/* 탐지된 영역 수 */}
+          <div className="py-[18px] px-5 text-center border-r border-[#eef0f5]">
+            <div className="flex items-center justify-center gap-[6px] text-[12.5px] text-[#6b7388] font-medium mb-2">
+              <Target size={13} />탐지된 영역 수
             </div>
-          ))}
+            <div className="text-[22px] font-extrabold text-[#1f2330] tracking-[-0.01em] mb-[8px]">
+              {detectCount}개
+            </div>
+            {uploadResult && uploadResult.detections.length > 0 && (
+              <div className="flex flex-wrap justify-center gap-[4px]">
+                {groupDetections(uploadResult.detections).map(({ label, count }) => (
+                  <span
+                    key={label}
+                    className="inline-flex items-center gap-[4px] px-[8px] py-[2px] bg-[#e8edf8] text-[#1d2c4e] text-[11.5px] font-semibold rounded-full"
+                  >
+                    <span className="w-[5px] h-[5px] rounded-full bg-[#1d2c4e] shrink-0" />
+                    {label} {count}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 평균 신뢰도 */}
+          <div className="py-[18px] px-5 text-center border-r border-[#eef0f5]">
+            <div className="flex items-center justify-center gap-[6px] text-[12.5px] text-[#6b7388] font-medium mb-2">
+              <ShieldCheck size={13} />평균 신뢰도
+            </div>
+            <div className="text-[22px] font-extrabold text-[#1f2330] tracking-[-0.01em] mb-[10px]">
+              {avgConfidence !== null ? `${Math.round(avgConfidence * 100)}%` : "—"}
+            </div>
+            {avgConfidence !== null && (
+              <div className="w-[80px] mx-auto bg-[#e2e5ec] rounded-full h-[5px]">
+                <div
+                  className="bg-[#2ecc71] h-[5px] rounded-full"
+                  style={{ width: `${avgConfidence * 100}%` }}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* 처리 시간 */}
+          <div className="py-[18px] px-5 text-center">
+            <div className="flex items-center justify-center gap-[6px] text-[12.5px] text-[#6b7388] font-medium mb-2">
+              <Clock size={13} />처리 시간
+            </div>
+            <div className="text-[22px] font-extrabold text-[#1f2330] tracking-[-0.01em]">
+              {timeStr}
+            </div>
+          </div>
         </div>
       </div>
 
@@ -262,7 +395,6 @@ function Step3Side({
             { k: "생성 날짜", v: TODAY },
             { k: "파일 개수", v: `${data.files.length}개` },
             { k: "전체 용량", v: `${totalSize.toFixed(1)}MB` },
-            { k: "처리 상태", v: null, badge: "자동 처리 완료" },
             { k: "사건 설명", v: data.desc || "—" },
           ].map(({ k, v, badge }) => (
             <div key={k} className="grid text-[13.5px] py-[10px] border-b border-[#f0f1f5] last:border-b-0" style={{ gridTemplateColumns: "100px 1fr" }}>
@@ -285,30 +417,35 @@ function Step3Side({
         <table className="w-full border-collapse">
           <thead>
             <tr>
-              {["파일명", "크기", "처리 상태"].map((h) => (
-                <th key={h} className="text-left text-[12.5px] font-semibold text-[#6b7388] pb-2 border-b border-[#ebedf2]">{h}</th>
+              {["파일명", "크기"].map((h) => (
+                <th key={h} className="text-left text-[12.5px] font-semibold text-[#6b7388] pb-2 border-b border-[#ebedf2] first:pl-[6px] last:pr-[6px]">{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {pageFiles.length === 0 && (
-              <tr><td colSpan={3} className="text-center text-[#9aa1b3] py-6 text-[13px]">업로드된 파일이 없습니다</td></tr>
+              <tr><td colSpan={2} className="text-center text-[#9aa1b3] py-6 text-[13px]">업로드된 파일이 없습니다</td></tr>
             )}
             {pageFiles.map((f) => {
               const isSelected = selectedFile?.id === f.id;
               return (
                 <tr key={f.id} onClick={() => onSelectFile(f)}
                   className={cn("cursor-pointer transition-colors", isSelected ? "[&>td]:bg-[#eef1f8]" : "hover:[&>td]:bg-[#f7f8fb]")}>
-                  <td className="py-[14px] border-b border-[#f0f1f5] text-[13px] text-[#3a4055]">
-                    <span className="inline-block w-[38px] h-[30px] rounded bg-[#f0f1f5] overflow-hidden align-middle mr-[10px]">
-                      <CompareScene mosaic variant={f.seed} />
-                    </span>
-                    <span className={cn("inline-block align-middle font-semibold text-[12.5px] max-w-[100px] truncate", isSelected ? "text-[#1d2c4e]" : "text-[#1f2330]")}>{f.name}</span>
+                  <td className="py-[12px] pl-[6px] border-b border-[#f0f1f5] text-[13px] text-[#3a4055]">
+                    <div className="flex items-center gap-[10px]">
+                      <span className="shrink-0 w-[38px] h-[30px] rounded bg-[#f0f1f5] overflow-hidden">
+                        {f.uploadResult?.storageUrl ? (
+                          <img src={f.uploadResult.storageUrl} alt={f.name} className="w-full h-full object-cover" />
+                        ) : (
+                          <CompareScene mosaic variant={f.seed} />
+                        )}
+                      </span>
+                      <span className={cn("font-semibold text-[12.5px] truncate", isSelected ? "text-[#1d2c4e]" : "text-[#1f2330]")}>
+                        {f.uploadResult?.originalFileName ?? f.name}
+                      </span>
+                    </div>
                   </td>
-                  <td className="py-[14px] border-b border-[#f0f1f5] text-[13px] text-[#3a4055] whitespace-nowrap">{f.sizeMB}MB</td>
-                  <td className="py-[14px] border-b border-[#f0f1f5]">
-                    <span className="inline-block bg-[#e3f4ea] text-[#1f7a47] font-bold text-[11.5px] px-2 py-[3px] rounded-[5px]">완료</span>
-                  </td>
+                  <td className="py-[12px] pr-[6px] border-b border-[#f0f1f5] text-[13px] text-[#3a4055] whitespace-nowrap">{f.sizeMB}MB</td>
                 </tr>
               );
             })}
@@ -345,6 +482,8 @@ export default function NewCasePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
+  const [isCreating, setIsCreating] = useState(false);
+  const [createdCaseId, setCreatedCaseId] = useState<string | number | null>(null);
 
   // Step 1
   const [caseNumber, setCaseNumber] = useState("");
@@ -416,6 +555,7 @@ export default function NewCasePage() {
       ...prev,
       ...rawFiles.map((f, i) => ({
         id: Date.now() + i,
+        file: f,
         name: f.name,
         sizeMB: +(f.size / (1024 * 1024)).toFixed(1) || 1.0,
         seed: prev.length + i,
@@ -454,9 +594,41 @@ export default function NewCasePage() {
     setStep(2);
   };
 
-  const goToStep3 = () => {
-    setSelectedFileId(files[0]?.id ?? null);
-    setStep(3);
+  const goToStep3 = async () => {
+    setIsCreating(true);
+    try {
+      const caseRes = await PostCase({
+        caseNumber,
+        title: caseName,
+        description: desc,
+        occurredAt: new Date().toISOString().slice(0, 19),
+        assignedTo: [rank, officer].filter(Boolean).join(" "),
+      });
+
+      const caseId = caseRes.caseId;
+      setCreatedCaseId(caseId);
+
+      const uploadResults = await PostFiles(
+        files.map((f) => f.file),
+        files.map((f) => ({
+          storageType: f.policy === "internal" ? "NAS" : "S3",
+          description: f.description,
+          categoryName: f.category,
+          tags: f.tags,
+          caseId,
+        })),
+      );
+
+      setFiles((prev) =>
+        prev.map((f, i) => ({ ...f, uploadResult: uploadResults[i] })),
+      );
+      setSelectedFileId(files[0]?.id ?? null);
+      setStep(3);
+    } catch {
+      toast.error("사건 생성에 실패했습니다. 다시 시도해주세요.");
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const handleFinish = () => router.push("/cases");
@@ -537,14 +709,17 @@ export default function NewCasePage() {
               </button>
               <button
                 onClick={goToStep3}
-                disabled={!isStep2Ready}
+                disabled={!isStep2Ready || isCreating}
                 className={cn(
-                  "px-6 py-[11px] rounded-[8px] text-[14px] font-bold transition-colors",
-                  isStep2Ready
+                  "px-6 py-[11px] rounded-[8px] text-[14px] font-bold transition-colors flex items-center gap-2",
+                  isStep2Ready && !isCreating
                     ? "bg-[#1d2c4e] text-white hover:bg-[#2b3f6c]"
                     : "bg-[#e2e5ec] text-[#9aa1b3] cursor-not-allowed",
                 )}>
-                사건 생성
+                {isCreating && (
+                  <span className="w-4 h-4 border-2 border-[#9aa1b3] border-t-transparent rounded-full animate-spin" />
+                )}
+                {isCreating ? "생성 중..." : "사건 생성"}
               </button>
             </>
           )}
