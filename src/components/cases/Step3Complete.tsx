@@ -17,15 +17,19 @@ import {
 } from "lucide-react";
 import CompareScene from "./CompareScene";
 import type { BBox } from "./ManualEditModal";
+import type { FileUploadResult, ReplaceFileResult } from "@/lib/api";
 
 interface UploadedFile {
   id: number;
   name: string;
   sizeMB: number;
   seed: number;
+  uploadResult?: FileUploadResult;
 }
 
 interface CompressedFile extends UploadedFile {
+  displayName: string;
+  storageUrl: string | undefined;
   original: number;
   after: number;
   saved: number;
@@ -34,32 +38,25 @@ interface CompressedFile extends UploadedFile {
 
 interface Props {
   caseName: string;
+  caseNumber: string;
   officer: string;
   files: UploadedFile[];
+  replaceResults: ReplaceFileResult[];
   manualBoxes: Record<number, BBox[]>;
 }
 
-const MOSAIC_BOX_STYLE: React.CSSProperties = {
-  position: "absolute",
-  pointerEvents: "none",
-  backgroundColor: "#a87555",
-  backgroundImage: [
-    "repeating-linear-gradient(0deg,rgba(0,0,0,0.20) 0 1px,transparent 1px)",
-    "repeating-linear-gradient(90deg,rgba(0,0,0,0.20) 0 1px,transparent 1px)",
-    "linear-gradient(135deg,#c4926e 0%,#a87555 35%,#6b4530 70%,#8a6048 100%)",
-  ].join(","),
-  backgroundSize: "8px 8px, 8px 8px, 100% 100%",
-  borderRadius: 2,
-};
+const TODAY_DISPLAY = new Date().toLocaleDateString("ko-KR", {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+});
 
 /* ── Preview Modal ── */
 function PreviewModal({
   file,
-  boxes,
   onClose,
 }: {
   file: CompressedFile;
-  boxes: BBox[];
   onClose: () => void;
 }) {
   return (
@@ -73,7 +70,7 @@ function PreviewModal({
       >
         <div className="flex items-center justify-between px-6 py-[18px] border-b border-[#ebedf2]">
           <div>
-            <h3 className="text-[16px] font-bold text-[#1f2330] m-0">{file.name}</h3>
+            <h3 className="text-[16px] font-bold text-[#1f2330] m-0">{file.displayName}</h3>
             <p className="text-[12.5px] text-[#6b7388] mt-[2px]">
               {file.after.toFixed(2)} MB · 모자이크 처리 완료
             </p>
@@ -87,19 +84,16 @@ function PreviewModal({
         </div>
         <div className="flex-1 p-6 bg-[#f5f6fa] flex items-center justify-center overflow-auto">
           <div className="w-full max-w-[720px] aspect-[4/3] bg-white rounded-[8px] overflow-hidden shadow-[0_4px_16px_rgba(15,22,40,0.10)] relative">
-            <CompareScene mosaic variant={file.seed} />
-            {boxes.map((b) => (
-              <div
-                key={b.id}
-                style={{
-                  ...MOSAIC_BOX_STYLE,
-                  left: `${b.x}%`,
-                  top: `${b.y}%`,
-                  width: `${b.w}%`,
-                  height: `${b.h}%`,
-                }}
+            {file.storageUrl ? (
+              <img
+                src={file.storageUrl}
+                alt={file.displayName}
+                className="absolute inset-0 w-full h-full"
+                style={{ objectFit: "contain" }}
               />
-            ))}
+            ) : (
+              <CompareScene mosaic variant={file.seed} />
+            )}
           </div>
         </div>
       </div>
@@ -108,32 +102,37 @@ function PreviewModal({
 }
 
 /* ── Main Component ── */
-export default function Step3Complete({ caseName, officer, files, manualBoxes }: Props) {
+export default function Step3Complete({ caseName, caseNumber, officer, files, replaceResults, manualBoxes }: Props) {
   const [carouselStart, setCarouselStart] = useState(0);
   const [previewFile, setPreviewFile] = useState<CompressedFile | null>(null);
 
   const compressed = useMemo<CompressedFile[]>(() =>
-    files.map((f) => {
-      const ratio = 0.30 + (f.seed % 5) * 0.05;
-      const after = +(f.sizeMB * ratio).toFixed(2);
-      const saved = +(f.sizeMB - after).toFixed(2);
-      const rate = +((saved / f.sizeMB) * 100).toFixed(1);
-      return { ...f, original: f.sizeMB, after, saved, rate };
+    files.map((f, i) => {
+      const result = replaceResults[i];
+      const displayName = f.uploadResult?.originalFileName ?? f.name;
+      const storageUrl = result?.storageUrl ?? f.uploadResult?.storageUrl;
+      const original = f.sizeMB;
+      const after = result
+        ? +(result.fileSize / (1024 * 1024)).toFixed(2)
+        : original;
+      const saved = +(original - after).toFixed(2);
+      const rate = original > 0 ? +((Math.max(0, saved) / original) * 100).toFixed(1) : 0;
+      return { ...f, displayName, storageUrl, original, after, saved, rate };
     }),
-    [files],
+    [files, replaceResults],
   );
 
   const totalOriginal = compressed.reduce((s, f) => s + f.original, 0);
   const totalAfter = compressed.reduce((s, f) => s + f.after, 0);
   const totalSaved = totalOriginal - totalAfter;
-  const totalRate = totalOriginal > 0 ? (totalSaved / totalOriginal) * 100 : 0;
+  const totalRate = totalOriginal > 0 ? (Math.max(0, totalSaved) / totalOriginal) * 100 : 0;
 
   const canNext = carouselStart + 3 < compressed.length;
   const canPrev = carouselStart > 0;
 
   return (
     <div className="flex flex-col gap-[22px]">
-      {/* Completion header */}
+      {/* 완료 헤더 */}
       <div className="flex justify-between items-start gap-6">
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 rounded-full bg-[#e3f4ea] flex items-center justify-center text-[#1f9d55] shrink-0">
@@ -148,7 +147,6 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
             </p>
           </div>
         </div>
-        {/* Download button */}
         <div className="flex rounded-[8px] overflow-hidden shadow-[0_2px_8px_rgba(15,22,40,0.08)] shrink-0">
           <button className="flex items-center gap-2 px-5 py-3 bg-[#1d2c4e] text-white text-[14px] font-bold hover:bg-[#2b3f6c] transition-colors">
             <Download size={16} />
@@ -160,7 +158,7 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
         </div>
       </div>
 
-      {/* Carousel — full width */}
+      {/* 캐러셀 */}
       <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[22px] flex flex-col">
         <div className="flex items-center gap-2 mb-4">
           <h3 className="text-[16px] font-bold text-[#1f2330] flex items-center gap-2 whitespace-nowrap">
@@ -173,7 +171,6 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
         </div>
 
         <div className="relative overflow-hidden">
-          {/* Track */}
           <div
             className="flex gap-3"
             style={{
@@ -188,11 +185,20 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
                 className="flex flex-col border border-[#e6e8ef] rounded-[10px] p-[10px] bg-white"
                 style={{ flex: "0 0 calc((100% - 24px) / 3)", minWidth: 0 }}
               >
-                <div className="w-full aspect-[4/3] bg-[#f0f1f5] rounded-[6px] overflow-hidden mb-2">
-                  <CompareScene mosaic variant={f.seed} />
+                <div className="w-full aspect-[4/3] bg-[#f0f1f5] rounded-[6px] overflow-hidden mb-2 relative">
+                  {f.storageUrl ? (
+                    <img
+                      src={f.storageUrl}
+                      alt={f.displayName}
+                      className="absolute inset-0 w-full h-full"
+                      style={{ objectFit: "cover" }}
+                    />
+                  ) : (
+                    <CompareScene mosaic variant={f.seed} />
+                  )}
                 </div>
                 <p className="text-[13px] font-semibold text-[#1f2330] truncate mb-1">
-                  {f.name}
+                  {f.displayName}
                 </p>
                 <p className="text-[12px] text-[#8a93a8] mb-2">{f.after.toFixed(2)} MB</p>
                 <button
@@ -206,7 +212,6 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
             ))}
           </div>
 
-          {/* Prev arrow */}
           {canPrev && (
             <button
               onClick={() => setCarouselStart((s) => Math.max(0, s - 1))}
@@ -216,7 +221,6 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
               <ChevronLeft size={20} />
             </button>
           )}
-          {/* Next arrow */}
           {canNext && (
             <button
               onClick={() => setCarouselStart((s) => Math.min(compressed.length - 3, s + 1))}
@@ -229,23 +233,19 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
         </div>
       </div>
 
-      {/* Info row — 50:50 */}
+      {/* 사건 정보 + 압축 요약 */}
       <div className="grid grid-cols-2 gap-[22px] items-stretch">
-        {/* Case info */}
         <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[22px] flex flex-col">
           <h3 className="text-[16px] font-bold text-[#1f2330] flex items-center gap-2 mb-4 whitespace-nowrap">
             <Archive size={16} className="text-[#1d2c4e]" />
             사건 정보
           </h3>
-          <div
-            className="grid flex-1"
-            style={{ gridTemplateColumns: "1fr 1fr", columnGap: 32 }}
-          >
+          <div className="grid flex-1" style={{ gridTemplateColumns: "1fr 1fr", columnGap: 32 }}>
             {[
+              { k: "사건 번호", v: caseNumber },
               { k: "사건명", v: caseName },
-              { k: "생성 날짜", v: "2026년 5월 22일" },
-              { k: "사건 담당자", v: `${officer} 순경` },
-              { k: "처리 완료", v: "2026.05.22 14:35" },
+              { k: "사건 담당자", v: officer || "—" },
+              { k: "생성 날짜", v: TODAY_DISPLAY },
               { k: "파일 개수", v: `${compressed.length}개` },
               { k: "원본 용량", v: `${totalOriginal.toFixed(2)} MB` },
               { k: "압축 후", v: `${totalAfter.toFixed(2)} MB` },
@@ -273,7 +273,6 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
           </div>
         </div>
 
-        {/* Compression summary */}
         <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[22px] flex flex-col">
           <h3 className="text-[16px] font-bold text-[#1f2330] flex items-center gap-2 mb-4 whitespace-nowrap">
             <BarChart2 size={16} className="text-[#1d2c4e]" />
@@ -283,7 +282,7 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
             {[
               { label: "원본 총 용량", value: `${totalOriginal.toFixed(2)} MB`, green: false },
               { label: "압축 후 총 용량", value: `${totalAfter.toFixed(2)} MB`, green: false },
-              { label: "절감 용량", value: `${totalSaved.toFixed(2)} MB`, green: false },
+              { label: "절감 용량", value: `${Math.max(0, totalSaved).toFixed(2)} MB`, green: false },
               { label: "절감률", value: `${totalRate.toFixed(1)}%`, green: true },
             ].map(({ label, value, green }, i) => (
               <div
@@ -307,7 +306,7 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
         </div>
       </div>
 
-      {/* File table */}
+      {/* 파일별 압축 정보 테이블 */}
       <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[22px]">
         <div className="flex items-center gap-2 mb-4">
           <h3 className="text-[16px] font-bold text-[#1f2330] flex items-center gap-2 whitespace-nowrap">
@@ -338,10 +337,19 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
             {compressed.map((f) => (
               <tr key={f.id}>
                 <td className="py-4 border-b border-[#f0f1f5] text-[13.5px] text-[#3a4055]">
-                  <span className="inline-block w-[52px] h-[38px] rounded bg-[#f0f1f5] overflow-hidden align-middle mr-[14px]">
-                    <CompareScene mosaic variant={f.seed} />
+                  <span className="inline-block w-[52px] h-[38px] rounded bg-[#f0f1f5] overflow-hidden align-middle mr-[14px] relative">
+                    {f.storageUrl ? (
+                      <img
+                        src={f.storageUrl}
+                        alt={f.displayName}
+                        className="absolute inset-0 w-full h-full"
+                        style={{ objectFit: "cover" }}
+                      />
+                    ) : (
+                      <CompareScene mosaic variant={f.seed} />
+                    )}
                   </span>
-                  <span className="font-semibold text-[#1f2330] align-middle">{f.name}</span>
+                  <span className="font-semibold text-[#1f2330] align-middle">{f.displayName}</span>
                 </td>
                 <td className="py-4 border-b border-[#f0f1f5] text-[13.5px] text-[#3a4055]">
                   {f.original.toFixed(2)} MB
@@ -350,7 +358,7 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
                   {f.after.toFixed(2)} MB
                 </td>
                 <td className="py-4 border-b border-[#f0f1f5] text-[13.5px] text-[#3a4055]">
-                  {f.saved.toFixed(2)} MB
+                  {Math.max(0, f.saved).toFixed(2)} MB
                 </td>
                 <td className="py-4 border-b border-[#f0f1f5] text-[13.5px] font-bold text-[#1f9d55]">
                   {f.rate.toFixed(1)}%
@@ -374,7 +382,6 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
           </tbody>
         </table>
 
-        {/* Info banner */}
         <div className="mt-[18px] bg-[#f5f6fa] border border-[#e6e8ef] rounded-[10px] px-[18px] py-[14px] text-center text-[13px] text-[#3a4055] flex items-center justify-center gap-2">
           <Info size={14} className="text-[#1d2c4e] shrink-0" />
           <span>
@@ -383,11 +390,9 @@ export default function Step3Complete({ caseName, officer, files, manualBoxes }:
         </div>
       </div>
 
-      {/* Preview modal */}
       {previewFile && (
         <PreviewModal
           file={previewFile}
-          boxes={manualBoxes[previewFile.id] ?? []}
           onClose={() => setPreviewFile(null)}
         />
       )}

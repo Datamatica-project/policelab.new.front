@@ -1,4 +1,4 @@
-import type { FileUploadResult } from "@/lib/api";
+import type { FileUploadResult, ReplaceFileResult } from "@/lib/api";
 import type { BBox } from "@/components/cases/ManualEditModal";
 
 const SESSION_KEY = "new-case-draft";
@@ -28,6 +28,7 @@ export interface CaseSessionData {
   desc: string;
   files: SessionFile[];
   manualBoxes: Record<number, BBox[]>;
+  replaceResults?: ReplaceFileResult[];
 }
 
 export function saveCaseSession(data: CaseSessionData): void {
@@ -102,6 +103,43 @@ export async function loadOriginalFiles(
 
   db.close();
   return result;
+}
+
+export async function saveMosaicFile(caseId: string, fileId: string, blob: Blob): Promise<void> {
+  const db = await openIDB();
+  const tx = db.transaction(IDB_STORE, "readwrite");
+  tx.objectStore(IDB_STORE).put(blob, `${caseId}_${fileId}_mosaic`);
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error); };
+  });
+}
+
+export async function loadMosaicFile(caseId: string, fileId: string): Promise<Blob | null> {
+  const db = await openIDB();
+  const tx = db.transaction(IDB_STORE, "readonly");
+  return new Promise((resolve) => {
+    const req = tx.objectStore(IDB_STORE).get(`${caseId}_${fileId}_mosaic`);
+    req.onsuccess = () => { db.close(); resolve((req.result as Blob) ?? null); };
+    req.onerror = () => { db.close(); resolve(null); };
+  });
+}
+
+export async function clearMosaicFiles(caseId: string, fileIds: string[]): Promise<void> {
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    const store = tx.objectStore(IDB_STORE);
+    for (const id of fileIds) {
+      store.delete(`${caseId}_${id}_mosaic`);
+    }
+    await new Promise<void>((resolve) => {
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); resolve(); };
+    });
+  } catch {
+    // ignore
+  }
 }
 
 export async function clearOriginalFiles(

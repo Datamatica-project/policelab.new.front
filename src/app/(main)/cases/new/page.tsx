@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { PostCase, PostFiles, type FileUploadResult, type Detection } from "@/lib/api";
+import { ImageApi, PostCase, PostFiles, PostReplace, type FileUploadResult, type Detection, type ReplaceFileResult } from "@/lib/api";
 import {
   saveCaseSession,
   loadCaseSession,
@@ -29,6 +29,8 @@ import {
   saveOriginalFiles,
   loadOriginalFiles,
   clearOriginalFiles,
+  loadMosaicFile,
+  clearMosaicFiles,
 } from "@/lib/caseSession";
 import CompareScene from "@/components/cases/CompareScene";
 import ManualEditModal, { type BBox } from "@/components/cases/ManualEditModal";
@@ -318,19 +320,22 @@ function Step3Main({
   data,
   selectedFile,
   manualBoxes,
+  caseId,
   onManualEdit,
 }: {
   data: CaseFormData;
   selectedFile: UploadedFile | null;
   manualBoxes: Record<number, BBox[]>;
+  caseId: string;
   onManualEdit: (f: UploadedFile) => void;
 }) {
   const file = selectedFile ?? data.files[0] ?? null;
   const uploadResult = file?.uploadResult;
-  const fileBoxes = file ? (manualBoxes[file.id] ?? []) : [];
+  const fileBoxes = useMemo(() => file ? (manualBoxes[file.id] ?? []) : [], [file?.id, manualBoxes]);
   const detectCount = (uploadResult?.detectionCount ?? (file ? 2 + (file.seed % 4) : 0)) + fileBoxes.length;
   const [imgNaturalSize, setImgNaturalSize] = useState<{ w: number; h: number } | null>(null);
   const [originalUrl, setOriginalUrl] = useState<string | null>(null);
+  const [mosaicDisplayUrl, setMosaicDisplayUrl] = useState<string | null>(null);
 
   useEffect(() => {
     setImgNaturalSize(null);
@@ -345,6 +350,25 @@ function Step3Main({
     setOriginalUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [file?.id, file?.file]);
+
+  // 수동 모자이크 IDB 우선, 없으면 storageUrl
+  useEffect(() => {
+    const fileId = uploadResult?.fileId;
+    const fallback = uploadResult?.storageUrl ?? null;
+    if (!fileId || !caseId) { setMosaicDisplayUrl(fallback); return; }
+    let objUrl: string | null = null;
+    loadMosaicFile(caseId, fileId).then((blob) => {
+      if (blob) {
+        objUrl = URL.createObjectURL(blob);
+        setMosaicDisplayUrl(objUrl);
+      } else {
+        setMosaicDisplayUrl(fallback);
+      }
+    });
+    return () => { if (objUrl) URL.revokeObjectURL(objUrl); };
+  // fileBoxes를 dep에 포함 → 수동 모자이크 적용 후 manualBoxes 변경 시 재조회
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [file?.id, caseId, fileBoxes]);
 
   const displayName = uploadResult?.originalFileName ?? file?.name ?? "—";
 
@@ -386,7 +410,7 @@ function Step3Main({
 
         <ImageCompareSlider
           originalUrl={originalUrl}
-          mosaicUrl={uploadResult?.storageUrl ?? null}
+          mosaicUrl={mosaicDisplayUrl}
           panelStyle={panelStyle}
           imgNaturalSize={imgNaturalSize}
           onNaturalSize={setImgNaturalSize}
@@ -577,7 +601,9 @@ export default function NewCasePage() {
 
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [isCreating, setIsCreating] = useState(false);
+  const [isCompressing, setIsCompressing] = useState(false);
   const [createdCaseId, setCreatedCaseId] = useState<string | number | null>(null);
+  const [replaceResults, setReplaceResults] = useState<ReplaceFileResult[]>([]);
 
   // Step 1
   const [caseNumber, setCaseNumber] = useState("");
@@ -654,6 +680,7 @@ export default function NewCasePage() {
     const restoredFiles: UploadedFile[] = session.files.map((f) => ({ ...f, file: null }));
     setFiles(restoredFiles);
     setSelectedFileId(restoredFiles[0]?.id ?? null);
+    if (session.replaceResults) setReplaceResults(session.replaceResults);
     setStep(session.step);
 
     // 원본 파일 IndexedDB에서 비동기 복원
@@ -662,6 +689,33 @@ export default function NewCasePage() {
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 최신 caseId/files를 ref로 추적 (unmount cleanup에서 사용)
+  const caseIdForCleanup = useRef<string | number | null>(null);
+  const filesForCleanup = useRef<UploadedFile[]>([]);
+  useEffect(() => { caseIdForCleanup.current = createdCaseId; }, [createdCaseId]);
+  useEffect(() => { filesForCleanup.current = files; }, [files]);
+
+  // cases/new URL을 벗어날 때 세션 클리어 (새로고침은 beforeunload로 구분하여 유지)
+  useEffect(() => {
+    let isRefreshing = false;
+    const onBeforeUnload = () => { isRefreshing = true; };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      if (!isRefreshing) {
+        clearCaseSession();
+        const caseId = caseIdForCleanup.current;
+        const cur = filesForCleanup.current;
+        if (caseId) {
+          const ids = cur.map((f) => f.id);
+          const fileIds = cur.map((f) => f.uploadResult?.fileId ?? "").filter(Boolean);
+          if (ids.length > 0) clearOriginalFiles(String(caseId), ids);
+          if (fileIds.length > 0) clearMosaicFiles(String(caseId), fileIds);
+        }
+      }
+    };
+  }, []); // mount/unmount에만 실행
 
   // step 3/4 진입 이후 상태 변경 시 sessionStorage 갱신
   useEffect(() => {
@@ -678,6 +732,7 @@ export default function NewCasePage() {
         id, name, sizeMB, seed, category, tags, policy, description, uploadResult,
       })),
       manualBoxes,
+      replaceResults,
     });
   }, [step, manualBoxes, files, createdCaseId, caseNumber, caseName, rank, officer, desc]);
 
@@ -774,10 +829,49 @@ export default function NewCasePage() {
     }
   };
 
+  const goToStep4 = async () => {
+    setIsCompressing(true);
+    try {
+      // 수동 모자이크 IDB 우선, 없으면 백엔드 /api/files/{fileId}
+      const fetchedFiles = await Promise.all(
+        files.map(async (f) => {
+          const fileId = f.uploadResult?.fileId;
+          const name = f.uploadResult?.originalFileName ?? f.name;
+          if (!fileId) return new File([], name, { type: "image/jpeg" });
+
+          const mosaicBlob = await loadMosaicFile(String(createdCaseId), fileId);
+          if (mosaicBlob) {
+            return new File([mosaicBlob], name, { type: mosaicBlob.type || "image/jpeg" });
+          }
+
+          const res = await ImageApi.get(`/api/files/${fileId}`, { responseType: "arraybuffer" });
+          const contentType = (res.headers as Record<string, string>)["content-type"] || "image/jpeg";
+          const blob = new Blob([res.data as ArrayBuffer], { type: contentType });
+          return new File([blob], name, { type: contentType });
+        }),
+      );
+
+      const metadata = files.map((f) => ({
+        fileId: f.uploadResult?.fileId ?? "",
+      }));
+
+      const results = await PostReplace(fetchedFiles, metadata);
+      setReplaceResults(results);
+      setStep(4);
+    } catch {
+      toast.error("파일 저장에 실패했습니다. 다시 시도해주세요.");
+    } finally {
+      setIsCompressing(false);
+    }
+  };
+
   const handleFinish = () => {
     if (createdCaseId) {
+      const caseId = String(createdCaseId);
+      const fileIds = files.map((f) => f.uploadResult?.fileId ?? "").filter(Boolean);
       clearCaseSession();
-      clearOriginalFiles(String(createdCaseId), files.map((f) => f.id));
+      clearOriginalFiles(caseId, files.map((f) => f.id));
+      clearMosaicFiles(caseId, fileIds);
     }
     router.push("/cases");
   };
@@ -878,9 +972,20 @@ export default function NewCasePage() {
                 className="px-6 py-[11px] bg-white border border-[#d9deea] rounded-[8px] text-[14px] font-semibold text-[#3a4055] hover:bg-[#f7f8fb] hover:border-[#c5cbd9] transition-colors">
                 이전
               </button>
-              <button onClick={() => setStep(4)}
-                className="px-6 py-[11px] bg-[#1d2c4e] text-white rounded-[8px] text-[14px] font-bold hover:bg-[#2b3f6c] transition-colors">
-                검수 완료 및 저장
+              <button
+                onClick={goToStep4}
+                disabled={isCompressing}
+                className={cn(
+                  "px-6 py-[11px] rounded-[8px] text-[14px] font-bold transition-colors flex items-center gap-2",
+                  !isCompressing
+                    ? "bg-[#1d2c4e] text-white hover:bg-[#2b3f6c]"
+                    : "bg-[#4a5e8a] text-white cursor-not-allowed",
+                )}
+              >
+                {isCompressing && (
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                )}
+                {isCompressing ? "저장 중..." : "검수 완료 및 저장"}
               </button>
             </>
           )}
@@ -1308,6 +1413,7 @@ export default function NewCasePage() {
             data={formData}
             selectedFile={selectedFile}
             manualBoxes={manualBoxes}
+            caseId={String(createdCaseId ?? "")}
             onManualEdit={(f) => setEditingFile(f)}
           />
           <Step3Side
@@ -1323,8 +1429,10 @@ export default function NewCasePage() {
       {step === 4 && (
         <Step3Complete
           caseName={caseName}
+          caseNumber={caseNumber}
           officer={assignedTo}
           files={files}
+          replaceResults={replaceResults}
           manualBoxes={manualBoxes}
         />
       )}
@@ -1333,6 +1441,9 @@ export default function NewCasePage() {
       {editingFile && (
         <ManualEditModal
           file={editingFile}
+          caseId={String(createdCaseId ?? "")}
+          fileId={editingFile.uploadResult?.fileId ?? ""}
+          storageUrl={editingFile.uploadResult?.storageUrl ?? null}
           initialBoxes={manualBoxes[editingFile.id] ?? []}
           onClose={() => setEditingFile(null)}
           onApply={(boxes) => {

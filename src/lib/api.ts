@@ -140,3 +140,37 @@ export const PostFiles = async (files: File[], metadataList: FileUploadMetadata[
   const response = await ImageApi.post("/api/files/upload", formData);
   return response.data;
 };
+
+export interface ReplaceFileMetadata {
+  fileId: string;
+  boxes?: number[][];
+}
+
+export interface ReplaceFileResult {
+  fileId: string;
+  fileName: string;
+  originalFileName: string;
+  fileSize: number;
+  contentType: string;
+  storageUrl: string;
+}
+
+export const PostReplace = async (
+  files: File[],
+  metadata: ReplaceFileMetadata[],
+): Promise<ReplaceFileResult[]> => {
+  const formData = new FormData();
+  files.forEach((file) => formData.append("files", file));
+  formData.append("metadata", JSON.stringify(metadata));
+
+  const response = await ImageApi.post("/api/files/replace", formData);
+  return response.data;
+};
+
+export const PostMosaic = async (file: File, boxes: number[][]): Promise<Blob> => {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("boxes", JSON.stringify(boxes));
+  const response = await MosaicApi.post("/blur_boxes", formData, { responseType: "blob" });
+  return response.data as Blob;
+};
