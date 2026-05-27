@@ -242,8 +242,8 @@ function ImageCompareSlider({
         </div>
       )}
 
-      {/* 탐지/수동 박스 (윤곽선만 표시) */}
-      {imgNaturalSize &&
+      {/* 탐지 박스: manualBoxes가 있으면 이미 auto 포함되어 있으므로 autoDetections 스킵 */}
+      {imgNaturalSize && manualBoxes.length === 0 &&
         autoDetections.map((det, i) => {
           const [x1, y1, x2, y2] = det.expanded_box_xyxy;
           return (
@@ -332,7 +332,10 @@ function Step3Main({
   const file = selectedFile ?? data.files[0] ?? null;
   const uploadResult = file?.uploadResult;
   const fileBoxes = useMemo(() => file ? (manualBoxes[file.id] ?? []) : [], [file?.id, manualBoxes]);
-  const detectCount = (uploadResult?.detectionCount ?? (file ? 2 + (file.seed % 4) : 0)) + fileBoxes.length;
+  // 수동 편집 적용 후에는 fileBoxes가 auto+manual 전체이므로 그걸 그대로 사용
+  const detectCount = fileBoxes.length > 0
+    ? fileBoxes.length
+    : (uploadResult?.detectionCount ?? (file ? 2 + (file.seed % 4) : 0));
   const [imgNaturalSize, setImgNaturalSize] = useState<{ w: number; h: number } | null>(null);
   const [originalUrl, setOriginalUrl] = useState<string | null>(null);
   const [mosaicDisplayUrl, setMosaicDisplayUrl] = useState<string | null>(null);
@@ -492,102 +495,60 @@ function Step3Side({
   manualBoxes: Record<number, BBox[]>;
   onSelectFile: (f: UploadedFile) => void;
 }) {
-  const totalSize = data.files.reduce((s, f) => s + f.sizeMB, 0);
-  const [page, setPage] = useState(1);
-  const PER = 6;
-  const totalPages = Math.max(1, Math.ceil(data.files.length / PER));
-  const pageFiles = data.files.slice((page - 1) * PER, page * PER);
-
   return (
-    <div className="flex flex-col gap-[22px]">
-      <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[22px]">
-        <h3 className="text-[17px] font-bold text-[#1f2330] tracking-[-0.01em] mb-[4px] flex items-center gap-2">
-          <Archive size={18} className="text-[#1d2c4e]" />
-          사건 정보
+    <div className="bg-white border border-[#e6e8ef] rounded-[10px] flex flex-col" style={{ position: "sticky", top: 24, maxHeight: "calc(100vh - 180px)" }}>
+      {/* 헤더 */}
+      <div className="px-[22px] pt-[20px] pb-[14px] border-b border-[#ebedf2] flex items-center gap-2 shrink-0">
+        <h3 className="text-[16px] font-bold text-[#1f2330] flex items-center gap-2">
+          파일 목록
         </h3>
-        <div className="flex flex-col">
-          {[
-            { k: "사건 번호", v: data.caseNumber || "—" },
-            { k: "사건명", v: data.caseName || "—" },
-            { k: "사건 담당자", v: [data.rank, data.officer].filter(Boolean).join(" ") || "—" },
-            { k: "생성 날짜", v: TODAY },
-            { k: "파일 개수", v: `${data.files.length}개` },
-            { k: "전체 용량", v: `${totalSize.toFixed(1)}MB` },
-            { k: "사건 설명", v: data.desc || "—" },
-          ].map(({ k, v, badge }) => (
-            <div key={k} className="grid text-[13.5px] py-[10px] border-b border-[#f0f1f5] last:border-b-0" style={{ gridTemplateColumns: "100px 1fr" }}>
-              <span className="text-[#6b7388] font-medium">{k}</span>
-              {badge ? (
-                <span className="inline-block bg-[#e3f4ea] text-[#1f7a47] font-bold text-[12px] px-2 py-[3px] rounded-[5px] w-fit">{badge}</span>
-              ) : (
-                <span className="text-[#1f2330] font-bold break-words">{v}</span>
-              )}
-            </div>
-          ))}
-        </div>
+        <span className="bg-[#1d2c4e] text-white text-[12px] font-bold px-[8px] py-[2px] rounded-full">
+          {data.files.length}
+        </span>
       </div>
 
-      <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[22px]">
-        <h3 className="text-[17px] font-bold text-[#1f2330] tracking-[-0.01em] mb-[18px] flex items-center gap-2">
-          파일 목록
-          <span className="bg-[#1d2c4e] text-white text-[12px] font-bold px-2 py-[1px] rounded-full">{data.files.length}</span>
-        </h3>
-        <table className="w-full border-collapse">
-          <thead>
-            <tr>
-              {["파일명", "크기"].map((h) => (
-                <th key={h} className="text-left text-[12.5px] font-semibold text-[#6b7388] pb-2 border-b border-[#ebedf2] first:pl-[6px] last:pr-[6px]">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {pageFiles.length === 0 && (
-              <tr><td colSpan={2} className="text-center text-[#9aa1b3] py-6 text-[13px]">업로드된 파일이 없습니다</td></tr>
-            )}
-            {pageFiles.map((f) => {
-              const isSelected = selectedFile?.id === f.id;
-              return (
-                <tr key={f.id} onClick={() => onSelectFile(f)}
-                  className={cn("cursor-pointer transition-colors", isSelected ? "[&>td]:bg-[#eef1f8]" : "hover:[&>td]:bg-[#f7f8fb]")}>
-                  <td className="py-[12px] pl-[6px] border-b border-[#f0f1f5] text-[13px] text-[#3a4055]">
-                    <div className="flex items-center gap-[10px]">
-                      <span className="shrink-0 w-[38px] h-[30px] rounded bg-[#f0f1f5] overflow-hidden">
-                        {f.uploadResult?.storageUrl ? (
-                          <img src={f.uploadResult.storageUrl} alt={f.name} className="w-full h-full object-cover" />
-                        ) : (
-                          <CompareScene mosaic variant={f.seed} />
-                        )}
-                      </span>
-                      <span className={cn("font-semibold text-[12.5px] truncate", isSelected ? "text-[#1d2c4e]" : "text-[#1f2330]")}>
-                        {f.uploadResult?.originalFileName ?? f.name}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="py-[12px] pr-[6px] border-b border-[#f0f1f5] text-[13px] text-[#3a4055] whitespace-nowrap">{f.sizeMB}MB</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-
-        {totalPages > 1 && (
-          <div className="flex justify-center items-center gap-[6px] pt-[14px]">
-            <button disabled={page === 1} onClick={() => setPage((p) => p - 1)}
-              className="w-[30px] h-[30px] border border-[#e2e5ec] rounded-[6px] bg-white text-[#6b7388] flex items-center justify-center hover:bg-[#f7f8fb] disabled:opacity-40 disabled:cursor-not-allowed">
-              <ChevronLeft size={13} />
-            </button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
-              <button key={n} onClick={() => setPage(n)}
-                className={cn("w-[30px] h-[30px] border rounded-[6px] text-[12.5px] font-medium flex items-center justify-center",
-                  n === page ? "bg-[#1d2c4e] border-[#1d2c4e] text-white" : "bg-white border-[#e2e5ec] text-[#3a4055] hover:bg-[#f7f8fb]")}>
-                {n}
-              </button>
-            ))}
-            <button disabled={page === totalPages} onClick={() => setPage((p) => p + 1)}
-              className="w-[30px] h-[30px] border border-[#e2e5ec] rounded-[6px] bg-white text-[#6b7388] flex items-center justify-center hover:bg-[#f7f8fb] disabled:opacity-40 disabled:cursor-not-allowed">
-              <ChevronRight size={13} />
-            </button>
-          </div>
+      {/* 스크롤 영역 */}
+      <div className="flex-1 overflow-y-auto min-h-0">
+        {data.files.length === 0 ? (
+          <p className="text-center text-[#9aa1b3] py-10 text-[13px]">업로드된 파일이 없습니다</p>
+        ) : (
+          data.files.map((f, idx) => {
+            const isSelected = selectedFile?.id === f.id;
+            return (
+              <div
+                key={f.id}
+                onClick={() => onSelectFile(f)}
+                className={cn(
+                  "flex items-center gap-[12px] px-[16px] py-[12px] cursor-pointer transition-colors border-b border-[#f0f1f5] last:border-b-0",
+                  isSelected ? "bg-[#eef1f8]" : "hover:bg-[#f7f8fb]",
+                )}
+              >
+                {/* 순번 */}
+                <span className="shrink-0 w-[22px] text-[12px] font-bold text-[#9aa1b3] text-center">
+                  {idx + 1}
+                </span>
+                {/* 썸네일 */}
+                <span className="shrink-0 w-[42px] h-[32px] rounded-[4px] bg-[#f0f1f5] overflow-hidden">
+                  {f.uploadResult?.storageUrl ? (
+                    <img src={f.uploadResult.storageUrl} alt={f.name} className="w-full h-full object-cover" />
+                  ) : (
+                    <CompareScene mosaic variant={f.seed} />
+                  )}
+                </span>
+                {/* 파일 정보 */}
+                <div className="flex-1 min-w-0">
+                  <p className={cn("text-[13px] font-semibold truncate", isSelected ? "text-[#1d2c4e]" : "text-[#1f2330]")}>
+                    {f.uploadResult?.originalFileName ?? f.name}
+                  </p>
+                  <p className="text-[11.5px] text-[#9aa1b3] mt-[1px]">{f.sizeMB} MB</p>
+                </div>
+                {/* 선택 표시 */}
+                {isSelected && (
+                  <span className="shrink-0 w-[6px] h-[6px] rounded-full bg-[#1d2c4e]" />
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </div>
@@ -1408,7 +1369,7 @@ export default function NewCasePage() {
 
       {/* ── STEP 3: 처리 및 결과 ── */}
       {step === 3 && (
-        <div className="grid gap-[22px]" style={{ gridTemplateColumns: "1.45fr 1fr", alignItems: "start" }}>
+        <div className="grid gap-[22px]" style={{ gridTemplateColumns: "1.45fr 1fr", alignItems: "start", minHeight: 0 }}>
           <Step3Main
             data={formData}
             selectedFile={selectedFile}
@@ -1443,7 +1404,7 @@ export default function NewCasePage() {
           file={editingFile}
           caseId={String(createdCaseId ?? "")}
           fileId={editingFile.uploadResult?.fileId ?? ""}
-          storageUrl={editingFile.uploadResult?.storageUrl ?? null}
+          autoDetections={editingFile.uploadResult?.detections ?? []}
           initialBoxes={manualBoxes[editingFile.id] ?? []}
           onClose={() => setEditingFile(null)}
           onApply={(boxes) => {

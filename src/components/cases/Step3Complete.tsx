@@ -1,10 +1,10 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import JSZip from "jszip";
 import {
   Check,
   Download,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Archive,
@@ -14,10 +14,13 @@ import {
   ExternalLink,
   X,
   Image,
+  Loader2,
 } from "lucide-react";
+import { toast } from "sonner";
 import CompareScene from "./CompareScene";
 import type { BBox } from "./ManualEditModal";
 import type { FileUploadResult, ReplaceFileResult } from "@/lib/api";
+import { ImageApi } from "@/lib/api";
 
 interface UploadedFile {
   id: number;
@@ -105,6 +108,7 @@ function PreviewModal({
 export default function Step3Complete({ caseName, caseNumber, officer, files, replaceResults, manualBoxes }: Props) {
   const [carouselStart, setCarouselStart] = useState(0);
   const [previewFile, setPreviewFile] = useState<CompressedFile | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const compressed = useMemo<CompressedFile[]>(() =>
     files.map((f, i) => {
@@ -130,6 +134,93 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
   const canNext = carouselStart + 3 < compressed.length;
   const canPrev = carouselStart > 0;
 
+  const handleDownload = async () => {
+    setIsDownloading(true);
+    try {
+      const zip = new JSZip();
+      const folderName = `case_${caseNumber || "unknown"}`;
+      const imgFolder = zip.folder(`${folderName}/images`)!;
+
+      // 파일 fetch (백엔드 경유 → S3 CORS 우회)
+      await Promise.all(
+        compressed.map(async (f, i) => {
+          const fileId = replaceResults[i]?.fileId ?? f.uploadResult?.fileId;
+          if (!fileId) return;
+          try {
+            const res = await ImageApi.get(`/api/files/${fileId}`, { responseType: "arraybuffer" });
+            const ct = (res.headers as Record<string, string>)["content-type"] || "image/jpeg";
+            const ext = ct.split("/")[1]?.split(";")[0] ?? "jpg";
+            const safeName = f.displayName.replace(/[^\w.\-]/g, "_");
+            const fileName = safeName.includes(".") ? safeName : `${safeName}.${ext}`;
+            imgFolder.file(fileName, res.data as ArrayBuffer);
+          } catch {
+            // 개별 파일 실패는 건너뜀
+          }
+        }),
+      );
+
+      // metadata.json 생성
+      const metadata = {
+        exportedAt: new Date().toISOString(),
+        case: {
+          caseNumber,
+          caseName,
+          officer: officer || "—",
+          createdAt: TODAY_DISPLAY,
+        },
+        summary: {
+          totalFiles: compressed.length,
+          totalOriginalSizeMB: +totalOriginal.toFixed(2),
+          totalCompressedSizeMB: +totalAfter.toFixed(2),
+          savedSizeMB: +Math.max(0, totalSaved).toFixed(2),
+          savedRate: `${totalRate.toFixed(1)}%`,
+        },
+        files: compressed.map((f, i) => ({
+          fileName: f.displayName,
+          fileId: replaceResults[i]?.fileId ?? f.uploadResult?.fileId ?? "",
+          originalSizeMB: f.original,
+          compressedSizeMB: f.after,
+          savedSizeMB: +Math.max(0, f.saved).toFixed(2),
+          savedRate: `${f.rate.toFixed(1)}%`,
+          autoDetections: {
+            count: f.uploadResult?.detectionCount ?? 0,
+            details: f.uploadResult?.detections ?? [],
+          },
+          manualDetections: (() => {
+            const boxes = (manualBoxes[f.id] ?? []).filter((b) => b.source === "manual");
+            return {
+              count: boxes.length,
+              details: boxes.map((b) => ({
+                box_xyxy: [
+                  Math.round(b.pxX),
+                  Math.round(b.pxY),
+                  Math.round(b.pxX + b.pxW),
+                  Math.round(b.pxY + b.pxH),
+                ],
+              })),
+            };
+          })(),
+        })),
+      };
+      zip.file(`${folderName}/metadata.json`, JSON.stringify(metadata, null, 2));
+
+      // ZIP 다운로드 트리거
+      const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${folderName}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      toast.success("다운로드가 완료되었습니다.");
+    } catch {
+      toast.error("다운로드에 실패했습니다. 다시 시도해주세요.");
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-[22px]">
       {/* 완료 헤더 */}
@@ -147,15 +238,14 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
             </p>
           </div>
         </div>
-        <div className="flex rounded-[8px] overflow-hidden shadow-[0_2px_8px_rgba(15,22,40,0.08)] shrink-0">
-          <button className="flex items-center gap-2 px-5 py-3 bg-[#1d2c4e] text-white text-[14px] font-bold hover:bg-[#2b3f6c] transition-colors">
-            <Download size={16} />
-            결과 다운로드 (ZIP)
-          </button>
-          <button className="w-9 bg-[#1d2c4e] text-white border-l border-white/20 flex items-center justify-center hover:bg-[#2b3f6c] transition-colors">
-            <ChevronDown size={14} />
-          </button>
-        </div>
+        <button
+          onClick={handleDownload}
+          disabled={isDownloading}
+          className="flex items-center gap-2 px-5 py-3 bg-[#1d2c4e] text-white text-[14px] font-bold hover:bg-[#2b3f6c] transition-colors rounded-[8px] shadow-[0_2px_8px_rgba(15,22,40,0.08)] disabled:bg-[#4a5e8a] disabled:cursor-not-allowed shrink-0"
+        >
+          {isDownloading ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+          {isDownloading ? "다운로드 중..." : "결과 다운로드 (ZIP)"}
+        </button>
       </div>
 
       {/* 캐러셀 */}

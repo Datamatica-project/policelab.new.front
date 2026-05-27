@@ -10,18 +10,22 @@ import {
   Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import CompareScene from "./CompareScene";
+import { toast } from "sonner";
+import { PostMosaic } from "@/lib/api";
+import type { Detection } from "@/lib/api";
+import { saveMosaicFile, loadOriginalFiles } from "@/lib/caseSession";
 
 export interface BBox {
   id: number;
-  x: number;   // % of stage width
-  y: number;   // % of stage height
-  w: number;   // % of stage width
-  h: number;   // % of stage height
+  x: number;       // % of stage width
+  y: number;       // % of stage height
+  w: number;       // % of stage width
+  h: number;       // % of stage height
   pxX: number;
   pxY: number;
   pxW: number;
   pxH: number;
+  source?: "auto" | "manual";
 }
 
 interface DraftBox {
@@ -33,34 +37,68 @@ interface DraftBox {
 
 interface Props {
   file: { id: number; name: string; sizeMB: number; seed: number } | null;
+  caseId: string;
+  fileId: string;
+  autoDetections: Detection[];
   initialBoxes: BBox[];
   onClose: () => void;
   onApply: (boxes: BBox[]) => void;
 }
 
-const MOSAIC_BOX_STYLE: React.CSSProperties = {
-  position: "absolute",
-  pointerEvents: "none",
-  backgroundColor: "#a87555",
-  backgroundImage: [
-    "repeating-linear-gradient(0deg, rgba(0,0,0,0.20) 0 1px, transparent 1px)",
-    "repeating-linear-gradient(90deg, rgba(0,0,0,0.20) 0 1px, transparent 1px)",
-    "linear-gradient(135deg, #c4926e 0%, #a87555 35%, #6b4530 70%, #8a6048 100%)",
-  ].join(", "),
-  backgroundSize: "8px 8px, 8px 8px, 100% 100%",
-  borderRadius: 2,
-  boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.10)",
-};
-
-export default function ManualEditModal({ file, initialBoxes, onClose, onApply }: Props) {
+export default function ManualEditModal({
+  file, caseId, fileId, autoDetections, initialBoxes, onClose, onApply,
+}: Props) {
   const [history, setHistory] = useState<BBox[][]>([initialBoxes]);
   const [hIndex, setHIndex] = useState(0);
   const [zoom, setZoom] = useState(100);
   const [draft, setDraft] = useState<DraftBox | null>(null);
+  const [isApplying, setIsApplying] = useState(false);
+  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
+  const [originalUrl, setOriginalUrl] = useState<string | null>(null);
+  const [originalFile, setOriginalFile] = useState<File | null>(null);
+  const [autoInitialized, setAutoInitialized] = useState(initialBoxes.length > 0);
   const stageRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; rect: DOMRect } | null>(null);
 
   const boxes = history[hIndex] ?? [];
+
+  // 원본 이미지 IDB에서 로드
+  useEffect(() => {
+    if (!file?.id || !caseId) return;
+    let objUrl: string | null = null;
+    loadOriginalFiles(caseId, [file.id]).then((fileMap) => {
+      const f = fileMap.get(file.id);
+      if (f) {
+        setOriginalFile(f);
+        objUrl = URL.createObjectURL(f);
+        setOriginalUrl(objUrl);
+      }
+    });
+    return () => { if (objUrl) URL.revokeObjectURL(objUrl); };
+  }, [caseId, file?.id]);
+
+  // 최초 진입 시 자동 탐지 박스를 초기 박스로 변환 (naturalSize 확보 후)
+  useEffect(() => {
+    if (autoInitialized || !naturalSize || autoDetections.length === 0) return;
+    const autoBBoxes: BBox[] = autoDetections.map((d, i) => {
+      const [x1, y1, x2, y2] = d.box_xyxy;
+      return {
+        id: -(i + 1),
+        x: (x1 / naturalSize.w) * 100,
+        y: (y1 / naturalSize.h) * 100,
+        w: ((x2 - x1) / naturalSize.w) * 100,
+        h: ((y2 - y1) / naturalSize.h) * 100,
+        pxX: x1,
+        pxY: y1,
+        pxW: x2 - x1,
+        pxH: y2 - y1,
+        source: "auto" as const,
+      };
+    });
+    setHistory([[...autoBBoxes]]);
+    setHIndex(0);
+    setAutoInitialized(true);
+  }, [naturalSize, autoInitialized, autoDetections]);
 
   const commitBoxes = (next: BBox[]) => {
     const trimmed = history.slice(0, hIndex + 1);
@@ -69,6 +107,7 @@ export default function ManualEditModal({ file, initialBoxes, onClose, onApply }
     setHIndex(newHist.length - 1);
   };
 
+  const removeBox = (id: number) => commitBoxes(boxes.filter((b) => b.id !== id));
   const undo = () => { if (hIndex > 0) setHIndex((i) => i - 1); };
   const redo = () => { if (hIndex < history.length - 1) setHIndex((i) => i + 1); };
   const reset = () => commitBoxes([]);
@@ -114,6 +153,7 @@ export default function ManualEditModal({ file, initialBoxes, onClose, onApply }
         pxY: Math.round(draft.y * (1024 / rect.height)),
         pxW: Math.round(draft.w * (1024 / rect.width)),
         pxH: Math.round(draft.h * (1024 / rect.height)),
+        source: "manual",
       };
       commitBoxes([...boxes, box]);
     }
@@ -142,6 +182,33 @@ export default function ManualEditModal({ file, initialBoxes, onClose, onApply }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hIndex, history.length]);
 
+  const handleApply = async () => {
+    if (boxes.length === 0) {
+      onApply(boxes);
+      return;
+    }
+    if (!fileId) { toast.error("파일 정보가 없습니다."); return; }
+    if (!originalFile) { toast.error("원본 이미지를 불러올 수 없습니다."); return; }
+    setIsApplying(true);
+    try {
+      const nw = naturalSize?.w ?? 1024;
+      const nh = naturalSize?.h ?? 1024;
+      const scaledBoxes: number[][] = boxes.map((b) => [
+        Math.round((b.x / 100) * nw),
+        Math.round((b.y / 100) * nh),
+        Math.round((b.w / 100) * nw),
+        Math.round((b.h / 100) * nh),
+      ]);
+      const resultBlob = await PostMosaic(originalFile, scaledBoxes);
+      await saveMosaicFile(caseId, fileId, resultBlob);
+      onApply(boxes);
+    } catch {
+      toast.error("모자이크 적용에 실패했습니다. 다시 시도해주세요.");
+    } finally {
+      setIsApplying(false);
+    }
+  };
+
   const lastBox = boxes[boxes.length - 1];
   const showBox = draft && draft.w > 0
     ? (() => {
@@ -156,6 +223,8 @@ export default function ManualEditModal({ file, initialBoxes, onClose, onApply }
       })()
     : lastBox ?? null;
   const showArea = showBox ? showBox.pxW * showBox.pxH : 0;
+  const autoCount = boxes.filter((b) => b.source === "auto").length;
+  const manualCount = boxes.filter((b) => b.source === "manual").length;
 
   return (
     <div
@@ -173,27 +242,20 @@ export default function ManualEditModal({ file, initialBoxes, onClose, onApply }
               수동 모자이크 편집
             </h3>
             <p className="text-[13.5px] text-[#6b7388]">
-              누락된 영역을 드래그하여 선택하고 모자이크를 적용하세요.
+              원본 이미지 기준으로 모자이크 영역을 조정하세요. 박스를 클릭하면 삭제됩니다.
             </p>
           </div>
           <div className="ml-auto flex items-center gap-[10px]">
-            {/* Zoom */}
             <div className="flex items-center border border-[#d9deea] rounded-[8px] overflow-hidden">
               <button
                 className="w-8 h-9 text-[16px] font-semibold text-[#6b7388] flex items-center justify-center hover:bg-[#f3f4f8] hover:text-[#1d2c4e]"
                 onClick={() => setZoom((z) => Math.max(50, z - 10))}
-              >
-                −
-              </button>
-              <span className="px-2 text-[13px] font-semibold text-[#1f2330] min-w-[52px] text-center">
-                {zoom}%
-              </span>
+              >−</button>
+              <span className="px-2 text-[13px] font-semibold text-[#1f2330] min-w-[52px] text-center">{zoom}%</span>
               <button
                 className="w-8 h-9 text-[16px] font-semibold text-[#6b7388] flex items-center justify-center hover:bg-[#f3f4f8] hover:text-[#1d2c4e]"
                 onClick={() => setZoom((z) => Math.min(200, z + 10))}
-              >
-                +
-              </button>
+              >+</button>
             </div>
             <button className="w-9 h-9 border border-[#d9deea] rounded-[8px] text-[#6b7388] flex items-center justify-center hover:text-[#1d2c4e]">
               <Maximize2 size={16} />
@@ -220,30 +282,73 @@ export default function ManualEditModal({ file, initialBoxes, onClose, onApply }
             </p>
             <div
               ref={stageRef}
-              className="relative w-full bg-[#f0f1f5] rounded-[8px] overflow-hidden select-none cursor-crosshair"
-              style={{ aspectRatio: "4/3" }}
+              className="relative w-full bg-[#1a1a1a] rounded-[8px] overflow-hidden select-none cursor-crosshair"
+              style={{ aspectRatio: naturalSize ? `${naturalSize.w}/${naturalSize.h}` : "4/3" }}
               onMouseDown={onMouseDown}
             >
               <div
                 className="w-full h-full"
                 style={{ transform: `scale(${zoom / 100})`, transformOrigin: "center" }}
               >
-                <CompareScene mosaic variant={file?.seed ?? 0} />
+                {originalUrl ? (
+                  <img
+                    src={originalUrl}
+                    alt={file?.name}
+                    className="w-full h-full"
+                    style={{ objectFit: "contain", pointerEvents: "none", userSelect: "none" }}
+                    onLoad={(e) => {
+                      const img = e.currentTarget;
+                      setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+                    }}
+                    draggable={false}
+                  />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-[#9aa1b3] text-[13px]">
+                    원본 이미지 로드 중...
+                  </div>
+                )}
               </div>
 
-              {/* Committed boxes */}
-              {boxes.map((b) => (
-                <div
-                  key={b.id}
-                  style={{
-                    ...MOSAIC_BOX_STYLE,
-                    left: `${b.x}%`,
-                    top: `${b.y}%`,
-                    width: `${b.w}%`,
-                    height: `${b.h}%`,
-                  }}
-                />
-              ))}
+              {/* Committed boxes — 클릭 시 삭제 */}
+              {boxes.map((b) => {
+                const isAuto = b.source === "auto";
+                return (
+                  <div
+                    key={b.id}
+                    onClick={(e) => { e.stopPropagation(); removeBox(b.id); }}
+                    title="클릭하여 삭제"
+                    style={{
+                      position: "absolute",
+                      left: `${b.x}%`,
+                      top: `${b.y}%`,
+                      width: `${b.w}%`,
+                      height: `${b.h}%`,
+                      border: `2px solid ${isAuto ? "#f59e0b" : "#3b82f6"}`,
+                      backgroundColor: isAuto ? "rgba(245,158,11,0.12)" : "rgba(59,130,246,0.12)",
+                      borderRadius: 2,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "flex-start",
+                      justifyContent: "flex-end",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 700,
+                        color: "#fff",
+                        background: isAuto ? "#f59e0b" : "#3b82f6",
+                        padding: "1px 3px",
+                        borderRadius: "0 0 0 3px",
+                        lineHeight: 1.4,
+                        userSelect: "none",
+                      }}
+                    >
+                      {isAuto ? "AUTO" : "MAN"}
+                    </span>
+                  </div>
+                );
+              })}
 
               {/* Draft box while dragging */}
               {draft && (draft.w > 0 || draft.h > 0) && (
@@ -254,30 +359,14 @@ export default function ManualEditModal({ file, initialBoxes, onClose, onApply }
                     top: draft.y,
                     width: draft.w,
                     height: draft.h,
-                    border: "2px dashed #2b6cb0",
-                    background: "rgba(43,108,176,0.10)",
+                    border: "2px dashed #3b82f6",
+                    background: "rgba(59,130,246,0.10)",
                     borderRadius: 2,
                     pointerEvents: "none",
                   }}
                 >
-                  {[
-                    { top: -5, left: -5 },
-                    { top: -5, right: -5 },
-                    { bottom: -5, left: -5 },
-                    { bottom: -5, right: -5 },
-                  ].map((pos, i) => (
-                    <span
-                      key={i}
-                      style={{
-                        position: "absolute",
-                        width: 8,
-                        height: 8,
-                        background: "#fff",
-                        border: "1.5px solid #2b6cb0",
-                        borderRadius: "50%",
-                        ...pos,
-                      }}
-                    />
+                  {[{ top: -5, left: -5 }, { top: -5, right: -5 }, { bottom: -5, left: -5 }, { bottom: -5, right: -5 }].map((pos, i) => (
+                    <span key={i} style={{ position: "absolute", width: 8, height: 8, background: "#fff", border: "1.5px solid #3b82f6", borderRadius: "50%", ...pos }} />
                   ))}
                 </div>
               )}
@@ -285,10 +374,9 @@ export default function ManualEditModal({ file, initialBoxes, onClose, onApply }
           </div>
 
           {/* Right: Info panel */}
-          <div>
-            {/* Selection info */}
-            <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[18px] mb-[14px]">
-              <h4 className="text-[14px] font-bold text-[#1f2330] mb-[14px]">선택 영역 정보</h4>
+          <div className="flex flex-col gap-[14px]">
+            <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[18px]">
+              <h4 className="text-[14px] font-bold text-[#1f2330] mb-[14px]">영역 정보</h4>
               {[
                 { k: "위치 (X, Y)", v: showBox ? `${showBox.pxX}, ${showBox.pxY}` : "—" },
                 { k: "크기 (W × H)", v: showBox ? `${showBox.pxW} × ${showBox.pxH}` : "—" },
@@ -296,20 +384,42 @@ export default function ManualEditModal({ file, initialBoxes, onClose, onApply }
               ].map(({ k, v }) => (
                 <div key={k} className="flex items-center justify-between mb-[10px] last:mb-0 text-[13px]">
                   <span className="text-[#6b7388]">{k}</span>
-                  <span className="bg-[#f5f6fa] border border-[#e6e8ef] px-[10px] py-[5px] rounded-[6px] text-[#1f2330] font-semibold text-[12.5px] min-w-[80px] text-center">
-                    {v}
-                  </span>
+                  <span className="bg-[#f5f6fa] border border-[#e6e8ef] px-[10px] py-[5px] rounded-[6px] text-[#1f2330] font-semibold text-[12.5px] min-w-[80px] text-center">{v}</span>
                 </div>
               ))}
             </div>
 
-            {/* Guide */}
+            {/* 박스 현황 */}
+            <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[18px]">
+              <h4 className="text-[14px] font-bold text-[#1f2330] mb-[12px]">박스 현황</h4>
+              <div className="flex flex-col gap-[8px]">
+                <div className="flex items-center justify-between text-[13px]">
+                  <span className="flex items-center gap-[6px] text-[#6b7388]">
+                    <span className="w-3 h-3 rounded-sm shrink-0" style={{ background: "#f59e0b" }} />
+                    자동 탐지
+                  </span>
+                  <span className="font-bold text-[#1f2330]">{autoCount}개</span>
+                </div>
+                <div className="flex items-center justify-between text-[13px]">
+                  <span className="flex items-center gap-[6px] text-[#6b7388]">
+                    <span className="w-3 h-3 rounded-sm shrink-0" style={{ background: "#3b82f6" }} />
+                    수동 추가
+                  </span>
+                  <span className="font-bold text-[#1f2330]">{manualCount}개</span>
+                </div>
+                <div className="flex items-center justify-between text-[13px] pt-[8px] border-t border-[#f0f1f5]">
+                  <span className="text-[#6b7388]">합계</span>
+                  <span className="font-bold text-[#1f2330]">{boxes.length}개</span>
+                </div>
+              </div>
+            </div>
+
             <div className="bg-[#f0f4fa] border border-[#d9e3f1] rounded-[10px] p-[16px] text-[12.5px] leading-[1.65] text-[#3a4055]">
               <div className="flex items-center gap-[6px] font-bold text-[#1f2330] text-[13px] mb-2">
                 <Info size={13} className="text-[#1d2c4e]" />
                 안내
               </div>
-              드래그하여 영역을 선택하면 자동으로 모자이크가 적용됩니다. 필요 시 영역을 다시 선택하거나 초기화 후 재선택할 수 있습니다.
+              원본 이미지 위에 자동 탐지 박스가 표시됩니다. 박스를 <strong>클릭</strong>하면 삭제, <strong>드래그</strong>하면 새 박스를 추가합니다.
             </div>
           </div>
         </div>
@@ -318,9 +428,9 @@ export default function ManualEditModal({ file, initialBoxes, onClose, onApply }
         <div className="flex items-center justify-between px-7 py-4 border-t border-[#ebedf2] bg-[#fafbfd] gap-3">
           <div className="flex gap-2">
             {[
-              { label: "초기화", icon: <RotateCcw size={14} />, onClick: reset, disabled: boxes.length === 0 },
-              { label: "뒤로가기", icon: <Undo2 size={14} />, onClick: undo, disabled: hIndex === 0 },
-              { label: "앞으로가기", icon: <Redo2 size={14} />, onClick: redo, disabled: hIndex >= history.length - 1 },
+              { label: "초기화", icon: <RotateCcw size={14} />, onClick: reset, disabled: boxes.length === 0 || isApplying },
+              { label: "뒤로가기", icon: <Undo2 size={14} />, onClick: undo, disabled: hIndex === 0 || isApplying },
+              { label: "앞으로가기", icon: <Redo2 size={14} />, onClick: redo, disabled: hIndex >= history.length - 1 || isApplying },
             ].map(({ label, icon, onClick, disabled }) => (
               <button
                 key={label}
@@ -331,23 +441,25 @@ export default function ManualEditModal({ file, initialBoxes, onClose, onApply }
                   "hover:bg-[#f3f4f8] hover:border-[#c5cbd9] disabled:text-[#c5cbd9] disabled:cursor-not-allowed",
                 )}
               >
-                {icon}
-                {label}
+                {icon}{label}
               </button>
             ))}
           </div>
           <div className="flex gap-2">
             <button
               onClick={onClose}
-              className="px-6 py-[11px] bg-white border border-[#d9deea] rounded-[8px] text-[14px] font-semibold text-[#3a4055] hover:bg-[#f7f8fb] hover:border-[#c5cbd9] transition-colors"
+              disabled={isApplying}
+              className="px-6 py-[11px] bg-white border border-[#d9deea] rounded-[8px] text-[14px] font-semibold text-[#3a4055] hover:bg-[#f7f8fb] hover:border-[#c5cbd9] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               취소
             </button>
             <button
-              onClick={() => onApply(boxes)}
-              className="px-6 py-[11px] bg-[#1d2c4e] text-white rounded-[8px] text-[14px] font-bold hover:bg-[#2b3f6c] transition-colors"
+              onClick={handleApply}
+              disabled={isApplying}
+              className="px-6 py-[11px] bg-[#1d2c4e] text-white rounded-[8px] text-[14px] font-bold hover:bg-[#2b3f6c] transition-colors disabled:bg-[#4a5e8a] disabled:cursor-not-allowed flex items-center gap-2"
             >
-              적용 후 닫기
+              {isApplying && <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+              {isApplying ? "처리 중..." : "적용 후 닫기"}
             </button>
           </div>
         </div>
