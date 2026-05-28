@@ -56,7 +56,6 @@ export default function ManualEditModal({
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
   const [originalUrl, setOriginalUrl] = useState<string | null>(null);
   const [originalFile, setOriginalFile] = useState<File | null>(null);
-  const [autoInitialized, setAutoInitialized] = useState(initialBoxes.length > 0);
   const stageRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ startX: number; startY: number; rect: DOMRect } | null>(null);
 
@@ -77,28 +76,6 @@ export default function ManualEditModal({
     return () => { if (objUrl) URL.revokeObjectURL(objUrl); };
   }, [caseId, file?.id]);
 
-  // 최초 진입 시 자동 탐지 박스를 초기 박스로 변환 (naturalSize 확보 후)
-  useEffect(() => {
-    if (autoInitialized || !naturalSize || autoDetections.length === 0) return;
-    const autoBBoxes: BBox[] = autoDetections.map((d, i) => {
-      const [x1, y1, x2, y2] = d.box_xyxy;
-      return {
-        id: -(i + 1),
-        x: (x1 / naturalSize.w) * 100,
-        y: (y1 / naturalSize.h) * 100,
-        w: ((x2 - x1) / naturalSize.w) * 100,
-        h: ((y2 - y1) / naturalSize.h) * 100,
-        pxX: x1,
-        pxY: y1,
-        pxW: x2 - x1,
-        pxH: y2 - y1,
-        source: "auto" as const,
-      };
-    });
-    setHistory([[...autoBBoxes]]);
-    setHIndex(0);
-    setAutoInitialized(true);
-  }, [naturalSize, autoInitialized, autoDetections]);
 
   const commitBoxes = (next: BBox[]) => {
     const trimmed = history.slice(0, hIndex + 1);
@@ -110,7 +87,23 @@ export default function ManualEditModal({
   const removeBox = (id: number) => commitBoxes(boxes.filter((b) => b.id !== id));
   const undo = () => { if (hIndex > 0) setHIndex((i) => i - 1); };
   const redo = () => { if (hIndex < history.length - 1) setHIndex((i) => i + 1); };
-  const reset = () => commitBoxes([]);
+  const reset = () => {
+    const autoBBoxes: BBox[] = naturalSize
+      ? autoDetections.map((d, i) => {
+          const [x1, y1, x2, y2] = d.box_xyxy;
+          return {
+            id: -(i + 1),
+            x: (x1 / naturalSize.w) * 100,
+            y: (y1 / naturalSize.h) * 100,
+            w: ((x2 - x1) / naturalSize.w) * 100,
+            h: ((y2 - y1) / naturalSize.h) * 100,
+            pxX: x1, pxY: y1, pxW: x2 - x1, pxH: y2 - y1,
+            source: "auto" as const,
+          };
+        })
+      : initialBoxes.filter((b) => b.source !== "manual");
+    commitBoxes(autoBBoxes);
+  };
 
   const onMouseDown = (e: React.MouseEvent) => {
     if (!stageRef.current) return;
@@ -428,7 +421,7 @@ export default function ManualEditModal({
         <div className="flex items-center justify-between px-7 py-4 border-t border-[#ebedf2] bg-[#fafbfd] gap-3">
           <div className="flex gap-2">
             {[
-              { label: "초기화", icon: <RotateCcw size={14} />, onClick: reset, disabled: boxes.length === 0 || isApplying },
+              { label: "초기화", icon: <RotateCcw size={14} />, onClick: reset, disabled: isApplying },
               { label: "뒤로가기", icon: <Undo2 size={14} />, onClick: undo, disabled: hIndex === 0 || isApplying },
               { label: "앞으로가기", icon: <Redo2 size={14} />, onClick: redo, disabled: hIndex >= history.length - 1 || isApplying },
             ].map(({ label, icon, onClick, disabled }) => (

@@ -45,7 +45,7 @@ interface Props {
   officer: string;
   files: UploadedFile[];
   replaceResults: ReplaceFileResult[];
-  manualBoxes: Record<number, BBox[]>;
+  reviewedBoxes: Record<number, BBox[]>;
 }
 
 const TODAY_DISPLAY = new Date().toLocaleDateString("ko-KR", {
@@ -105,7 +105,7 @@ function PreviewModal({
 }
 
 /* ── Main Component ── */
-export default function Step3Complete({ caseName, caseNumber, officer, files, replaceResults, manualBoxes }: Props) {
+export default function Step3Complete({ caseName, caseNumber, officer, files, replaceResults, reviewedBoxes }: Props) {
   const [carouselStart, setCarouselStart] = useState(0);
   const [previewFile, setPreviewFile] = useState<CompressedFile | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -186,11 +186,12 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
             count: f.uploadResult?.detectionCount ?? 0,
             details: f.uploadResult?.detections ?? [],
           },
-          manualDetections: (() => {
-            const boxes = (manualBoxes[f.id] ?? []).filter((b) => b.source === "manual");
+          reviewedBoxes: (() => {
+            const boxes = reviewedBoxes[f.id] ?? [];
             return {
               count: boxes.length,
               details: boxes.map((b) => ({
+                source: b.source ?? "auto",
                 box_xyxy: [
                   Math.round(b.pxX),
                   Math.round(b.pxY),

@@ -76,6 +76,7 @@ const POLICY_OPTIONS = [
 const CLASS_LABELS: Record<string, string> = {
   face: "얼굴",
   license_plate: "번호판",
+  plate: "번호판",
 };
 
 function groupDetections(detections: Detection[]) {
@@ -94,6 +95,34 @@ function groupDetections(detections: Detection[]) {
     count,
     maxConf,
   }));
+}
+
+function useCountAnimation(target: number, duration = 550): number {
+  const [value, setValue] = useState(target);
+  const fromRef = useRef(target);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const from = fromRef.current;
+    if (from === target) return;
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      setValue(Math.round(from + (target - from) * eased));
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(tick);
+      } else {
+        setValue(target);
+        fromRef.current = target;
+      }
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [target, duration]);
+
+  return value;
 }
 
 const TODAY = new Date().toLocaleDateString("ko-KR", {
@@ -178,7 +207,7 @@ function ImageCompareSlider({
   imgNaturalSize,
   onNaturalSize,
   autoDetections,
-  manualBoxes,
+  reviewedBoxes,
   seed,
 }: {
   originalUrl: string | null;
@@ -187,7 +216,7 @@ function ImageCompareSlider({
   imgNaturalSize: { w: number; h: number } | null;
   onNaturalSize: (size: { w: number; h: number }) => void;
   autoDetections: Detection[];
-  manualBoxes: BBox[];
+  reviewedBoxes: BBox[];
   seed: number;
 }) {
   const [sliderPct, setSliderPct] = useState(50);
@@ -242,8 +271,8 @@ function ImageCompareSlider({
         </div>
       )}
 
-      {/* 탐지 박스: manualBoxes가 있으면 이미 auto 포함되어 있으므로 autoDetections 스킵 */}
-      {imgNaturalSize && manualBoxes.length === 0 &&
+      {/* reviewedBoxes가 없을 때만 autoDetections 오버레이 표시 */}
+      {imgNaturalSize && reviewedBoxes.length === 0 &&
         autoDetections.map((det, i) => {
           const [x1, y1, x2, y2] = det.expanded_box_xyxy;
           return (
@@ -259,7 +288,7 @@ function ImageCompareSlider({
             />
           );
         })}
-      {manualBoxes.map((b) => (
+      {reviewedBoxes.map((b) => (
         <div
           key={b.id}
           style={{
@@ -319,30 +348,62 @@ function ImageCompareSlider({
 function Step3Main({
   data,
   selectedFile,
-  manualBoxes,
+  reviewedBoxes,
   caseId,
   onManualEdit,
+  onInitReviewed,
 }: {
   data: CaseFormData;
   selectedFile: UploadedFile | null;
-  manualBoxes: Record<number, BBox[]>;
+  reviewedBoxes: Record<number, BBox[]>;
   caseId: string;
   onManualEdit: (f: UploadedFile) => void;
+  onInitReviewed: (fileId: number, boxes: BBox[]) => void;
 }) {
   const file = selectedFile ?? data.files[0] ?? null;
   const uploadResult = file?.uploadResult;
-  const fileBoxes = useMemo(() => file ? (manualBoxes[file.id] ?? []) : [], [file?.id, manualBoxes]);
-  // 수동 편집 적용 후에는 fileBoxes가 auto+manual 전체이므로 그걸 그대로 사용
+  const fileBoxes = useMemo(() => file ? (reviewedBoxes[file.id] ?? []) : [], [file?.id, reviewedBoxes]);
   const detectCount = fileBoxes.length > 0
     ? fileBoxes.length
     : (uploadResult?.detectionCount ?? (file ? 2 + (file.seed % 4) : 0));
   const [imgNaturalSize, setImgNaturalSize] = useState<{ w: number; h: number } | null>(null);
   const [originalUrl, setOriginalUrl] = useState<string | null>(null);
   const [mosaicDisplayUrl, setMosaicDisplayUrl] = useState<string | null>(null);
+  const [mosaicSettled, setMosaicSettled] = useState(false);
+  const [sizeSettled, setSizeSettled] = useState(false);
 
+  // 파일 전환 시 준비 플래그 리셋 (imgNaturalSize는 유지 → 이전 비율 유지로 레이아웃 점프 방지)
   useEffect(() => {
-    setImgNaturalSize(null);
+    setMosaicSettled(false);
+    setSizeSettled(false);
   }, [file?.id]);
+
+  // 원본 파일 없을 때(새로고침 후) → naturalSize 대기 스킵
+  useEffect(() => {
+    if (originalUrl === null) setSizeSettled(true);
+  }, [originalUrl]);
+
+  // naturalSize 확보 후 reviewedBoxes 미초기화 파일 자동 초기화
+  useEffect(() => {
+    if (!file?.id || !imgNaturalSize) return;
+    if (reviewedBoxes[file.id] !== undefined) return;
+    const detections = uploadResult?.detections ?? [];
+    const autoBBoxes: BBox[] = detections.map((d, i) => {
+      const [x1, y1, x2, y2] = d.box_xyxy;
+      return {
+        id: -(i + 1),
+        x: (x1 / imgNaturalSize.w) * 100,
+        y: (y1 / imgNaturalSize.h) * 100,
+        w: ((x2 - x1) / imgNaturalSize.w) * 100,
+        h: ((y2 - y1) / imgNaturalSize.h) * 100,
+        pxX: x1, pxY: y1, pxW: x2 - x1, pxH: y2 - y1,
+        source: "auto" as const,
+      };
+    });
+    onInitReviewed(file.id, autoBBoxes);
+  // reviewedBoxes를 dep에서 제외 — 초기화 여부는 첫 naturalSize 확보 시점에만 판단
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imgNaturalSize, file?.id]);
 
   useEffect(() => {
     if (!file?.file) {
@@ -358,7 +419,11 @@ function Step3Main({
   useEffect(() => {
     const fileId = uploadResult?.fileId;
     const fallback = uploadResult?.storageUrl ?? null;
-    if (!fileId || !caseId) { setMosaicDisplayUrl(fallback); return; }
+    if (!fileId || !caseId) {
+      setMosaicDisplayUrl(fallback);
+      setMosaicSettled(true);
+      return;
+    }
     let objUrl: string | null = null;
     loadMosaicFile(caseId, fileId).then((blob) => {
       if (blob) {
@@ -367,9 +432,10 @@ function Step3Main({
       } else {
         setMosaicDisplayUrl(fallback);
       }
+      setMosaicSettled(true);
     });
     return () => { if (objUrl) URL.revokeObjectURL(objUrl); };
-  // fileBoxes를 dep에 포함 → 수동 모자이크 적용 후 manualBoxes 변경 시 재조회
+  // fileBoxes를 dep에 포함 → 수동 모자이크 적용 후 reviewedBoxes 변경 시 재조회
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file?.id, caseId, fileBoxes]);
 
@@ -380,10 +446,16 @@ function Step3Main({
     : null;
 
   const seedVal = file?.seed ?? 0;
-  const timeStr = `00:00:${String(5 + (seedVal % 10)).padStart(2, "0")}`;
+  const rawSeconds = 5 + (seedVal % 10);
+  const timeStr = `00:00:${String(rawSeconds).padStart(2, "0")}`;
+
+  const animatedCount = useCountAnimation(detectCount);
+  const animatedConfPct = useCountAnimation(avgConfidence !== null ? Math.round(avgConfidence * 100) : 0);
+  const animatedSeconds = useCountAnimation(rawSeconds);
   const panelStyle: React.CSSProperties = {
     aspectRatio: imgNaturalSize ? `${imgNaturalSize.w} / ${imgNaturalSize.h}` : "4/3",
   };
+  const sliderReady = mosaicSettled && sizeSettled;
 
   return (
     <div className="flex flex-col gap-[18px]">
@@ -411,16 +483,28 @@ function Step3Main({
           )}
         </div>
 
-        <ImageCompareSlider
-          originalUrl={originalUrl}
-          mosaicUrl={mosaicDisplayUrl}
-          panelStyle={panelStyle}
-          imgNaturalSize={imgNaturalSize}
-          onNaturalSize={setImgNaturalSize}
-          autoDetections={uploadResult?.detections ?? []}
-          manualBoxes={fileBoxes}
-          seed={file?.seed ?? 0}
-        />
+        <div className="relative">
+          <div style={{ visibility: sliderReady ? "visible" : "hidden" }}>
+            <ImageCompareSlider
+              originalUrl={originalUrl}
+              mosaicUrl={mosaicDisplayUrl}
+              panelStyle={panelStyle}
+              imgNaturalSize={imgNaturalSize}
+              onNaturalSize={(size) => { setImgNaturalSize(size); setSizeSettled(true); }}
+              autoDetections={uploadResult?.detections ?? []}
+              reviewedBoxes={fileBoxes}
+              seed={file?.seed ?? 0}
+            />
+          </div>
+          {!sliderReady && (
+            <div
+              className="absolute inset-0 bg-[#f0f1f5] rounded-[8px] flex items-center justify-center"
+              style={panelStyle}
+            >
+              <div className="w-8 h-8 border-[3px] border-[#d9deea] border-t-[#1d2c4e] rounded-full animate-spin" />
+            </div>
+          )}
+        </div>
 
         <div className="grid grid-cols-3 bg-[#f7f8fb] border border-[#eef0f5] rounded-[8px] mt-[18px] overflow-hidden">
           {/* 탐지된 영역 수 */}
@@ -429,21 +513,41 @@ function Step3Main({
               <Target size={13} />탐지된 영역 수
             </div>
             <div className="text-[22px] font-extrabold text-[#1f2330] tracking-[-0.01em] mb-[8px]">
-              {detectCount}개
+              {animatedCount}개
             </div>
-            {uploadResult && uploadResult.detections.length > 0 && (
+            {(uploadResult && uploadResult.detections.length > 0) || fileBoxes.some((b) => b.source === "manual") ? (
               <div className="flex flex-wrap justify-center gap-[4px]">
-                {groupDetections(uploadResult.detections).map(({ label, count }) => (
-                  <span
-                    key={label}
-                    className="inline-flex items-center gap-[4px] px-[8px] py-[2px] bg-[#e8edf8] text-[#1d2c4e] text-[11.5px] font-semibold rounded-full"
-                  >
-                    <span className="w-[5px] h-[5px] rounded-full bg-[#1d2c4e] shrink-0" />
-                    {label} {count}
-                  </span>
-                ))}
+                {(() => {
+                  // reviewedBoxes가 있으면 살아남은 auto 박스만 기준으로 클래스 집계
+                  const detections = uploadResult?.detections ?? [];
+                  const activeDetections = fileBoxes.length > 0
+                    ? fileBoxes
+                        .filter((b) => b.source !== "manual" && b.id < 0)
+                        .map((b) => detections[-b.id - 1])
+                        .filter((d): d is Detection => !!d)
+                    : detections;
+                  return groupDetections(activeDetections).map(({ label, count }) => (
+                    <span
+                      key={label}
+                      className="inline-flex items-center gap-[4px] px-[8px] py-[2px] bg-[#e8edf8] text-[#1d2c4e] text-[11.5px] font-semibold rounded-full"
+                    >
+                      <span className="w-[5px] h-[5px] rounded-full bg-[#1d2c4e] shrink-0" />
+                      {label} {count}
+                    </span>
+                  ));
+                })()}
+                {(() => {
+                  const manualCount = fileBoxes.filter((b) => b.source === "manual").length;
+                  if (manualCount === 0) return null;
+                  return (
+                    <span className="inline-flex items-center gap-[4px] px-[8px] py-[2px] bg-[#e8edf8] text-[#1d4ed8] text-[11.5px] font-semibold rounded-full">
+                      <span className="w-[5px] h-[5px] rounded-full bg-[#3b82f6] shrink-0" />
+                      수동 {manualCount}
+                    </span>
+                  );
+                })()}
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* 평균 신뢰도 */}
@@ -452,13 +556,13 @@ function Step3Main({
               <ShieldCheck size={13} />평균 신뢰도
             </div>
             <div className="text-[22px] font-extrabold text-[#1f2330] tracking-[-0.01em] mb-[10px]">
-              {avgConfidence !== null ? `${Math.round(avgConfidence * 100)}%` : "—"}
+              {avgConfidence !== null ? `${animatedConfPct}%` : "—"}
             </div>
             {avgConfidence !== null && (
               <div className="w-[80px] mx-auto bg-[#e2e5ec] rounded-full h-[5px]">
                 <div
                   className="bg-[#2ecc71] h-[5px] rounded-full"
-                  style={{ width: `${avgConfidence * 100}%` }}
+                  style={{ width: `${animatedConfPct}%` }}
                 />
               </div>
             )}
@@ -470,7 +574,7 @@ function Step3Main({
               <Clock size={13} />처리 시간
             </div>
             <div className="text-[22px] font-extrabold text-[#1f2330] tracking-[-0.01em]">
-              {timeStr}
+              {`00:00:${String(animatedSeconds).padStart(2, "0")}`}
             </div>
           </div>
         </div>
@@ -492,7 +596,6 @@ function Step3Side({
 }: {
   data: CaseFormData;
   selectedFile: UploadedFile | null;
-  manualBoxes: Record<number, BBox[]>;
   onSelectFile: (f: UploadedFile) => void;
 }) {
   return (
@@ -615,7 +718,7 @@ export default function NewCasePage() {
 
   // Step 3
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
-  const [manualBoxes, setManualBoxes] = useState<Record<number, BBox[]>>({});
+  const [reviewedBoxes, setReviewedBoxes] = useState<Record<number, BBox[]>>({});
   const [editingFile, setEditingFile] = useState<UploadedFile | null>(null);
 
   const totalSize = useMemo(() => files.reduce((s, f) => s + f.sizeMB, 0), [files]);
@@ -636,7 +739,7 @@ export default function NewCasePage() {
     setOfficer(session.officer);
     setDesc(session.desc);
     setCreatedCaseId(session.caseId);
-    setManualBoxes(session.manualBoxes);
+    setReviewedBoxes((session.reviewedBoxes as Record<number, BBox[]>) ?? {});
 
     const restoredFiles: UploadedFile[] = session.files.map((f) => ({ ...f, file: null }));
     setFiles(restoredFiles);
@@ -692,10 +795,10 @@ export default function NewCasePage() {
       files: files.map(({ id, name, sizeMB, seed, category, tags, policy, description, uploadResult }) => ({
         id, name, sizeMB, seed, category, tags, policy, description, uploadResult,
       })),
-      manualBoxes,
+      reviewedBoxes,
       replaceResults,
     });
-  }, [step, manualBoxes, files, createdCaseId, caseNumber, caseName, rank, officer, desc]);
+  }, [step, reviewedBoxes, files, createdCaseId, caseNumber, caseName, rank, officer, desc]);
 
   const formData: CaseFormData = { caseNumber, caseName, rank, officer, desc, files };
 
@@ -1373,14 +1476,14 @@ export default function NewCasePage() {
           <Step3Main
             data={formData}
             selectedFile={selectedFile}
-            manualBoxes={manualBoxes}
+            reviewedBoxes={reviewedBoxes}
             caseId={String(createdCaseId ?? "")}
             onManualEdit={(f) => setEditingFile(f)}
+            onInitReviewed={(fileId, boxes) => setReviewedBoxes((prev) => ({ ...prev, [fileId]: boxes }))}
           />
           <Step3Side
             data={formData}
             selectedFile={selectedFile}
-            manualBoxes={manualBoxes}
             onSelectFile={(f) => setSelectedFileId(f.id)}
           />
         </div>
@@ -1394,7 +1497,7 @@ export default function NewCasePage() {
           officer={assignedTo}
           files={files}
           replaceResults={replaceResults}
-          manualBoxes={manualBoxes}
+          reviewedBoxes={reviewedBoxes}
         />
       )}
 
@@ -1405,10 +1508,10 @@ export default function NewCasePage() {
           caseId={String(createdCaseId ?? "")}
           fileId={editingFile.uploadResult?.fileId ?? ""}
           autoDetections={editingFile.uploadResult?.detections ?? []}
-          initialBoxes={manualBoxes[editingFile.id] ?? []}
+          initialBoxes={reviewedBoxes[editingFile.id] ?? []}
           onClose={() => setEditingFile(null)}
           onApply={(boxes) => {
-            setManualBoxes((prev) => ({ ...prev, [editingFile.id]: boxes }));
+            setReviewedBoxes((prev) => ({ ...prev, [editingFile.id]: boxes }));
             setEditingFile(null);
           }}
         />

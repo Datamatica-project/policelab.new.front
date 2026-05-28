@@ -27,7 +27,7 @@ export interface CaseSessionData {
   officer: string;
   desc: string;
   files: SessionFile[];
-  manualBoxes: Record<number, BBox[]>;
+  reviewedBoxes: Record<number, BBox[]>;
   replaceResults?: ReplaceFileResult[];
 }
 
