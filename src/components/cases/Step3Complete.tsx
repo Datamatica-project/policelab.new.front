@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import CompareScene from "./CompareScene";
 import type { BBox } from "./ManualEditModal";
 import type { FileUploadResult, ReplaceFileResult } from "@/lib/api";
-import { ImageApi } from "@/lib/api";
+import { ApiClient } from "@/lib/api";
 
 interface UploadedFile {
   id: number;
@@ -68,7 +68,8 @@ function PreviewModal({
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div
-        className="bg-white rounded-[12px] overflow-hidden w-full max-w-[820px] max-h-[calc(100vh-80px)] flex flex-col shadow-[0_24px_60px_rgba(15,22,40,0.25)]"
+        className="bg-white rounded-[12px] overflow-hidden shadow-[0_24px_60px_rgba(15,22,40,0.25)]"
+        style={{ maxWidth: "min(820px, calc(100vw - 80px))" }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-6 py-[18px] border-b border-[#ebedf2]">
@@ -85,19 +86,27 @@ function PreviewModal({
             <X size={14} />
           </button>
         </div>
-        <div className="flex-1 p-6 bg-[#f5f6fa] flex items-center justify-center overflow-auto">
-          <div className="w-full max-w-[720px] aspect-[4/3] bg-white rounded-[8px] overflow-hidden shadow-[0_4px_16px_rgba(15,22,40,0.10)] relative">
-            {file.storageUrl ? (
-              <img
-                src={file.storageUrl}
-                alt={file.displayName}
-                className="absolute inset-0 w-full h-full"
-                style={{ objectFit: "contain" }}
-              />
-            ) : (
+        <div className="p-5 bg-[#f5f6fa]">
+          {file.storageUrl ? (
+            <img
+              src={file.storageUrl}
+              alt={file.displayName}
+              className="block rounded-[8px] shadow-[0_4px_16px_rgba(15,22,40,0.10)]"
+              style={{
+                maxWidth: "min(760px, calc(100vw - 120px))",
+                maxHeight: "calc(100vh - 220px)",
+                width: "100%",
+                height: "auto",
+              }}
+            />
+          ) : (
+            <div
+              className="rounded-[8px] overflow-hidden"
+              style={{ width: "min(760px, calc(100vw - 120px))", aspectRatio: "4/3" }}
+            >
               <CompareScene mosaic variant={file.seed} />
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -147,7 +156,7 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
           const fileId = replaceResults[i]?.fileId ?? f.uploadResult?.fileId;
           if (!fileId) return;
           try {
-            const res = await ImageApi.get(`/api/files/${fileId}`, { responseType: "arraybuffer" });
+            const res = await ApiClient.get(`/api/files/${fileId}`, { responseType: "arraybuffer" });
             const ct = (res.headers as Record<string, string>)["content-type"] || "image/jpeg";
             const ext = ct.split("/")[1]?.split(";")[0] ?? "jpg";
             const safeName = f.displayName.replace(/[^\w.\-]/g, "_");

@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { ImageApi, PostCase, PostFiles, PostReplace, type FileUploadResult, type Detection, type ReplaceFileResult } from "@/lib/api";
+import { ApiClient, PostCase, PostFiles, PostReplace, type FileUploadResult, type Detection, type ReplaceFileResult } from "@/lib/api";
 import {
   saveCaseSession,
   loadCaseSession,
@@ -441,8 +441,9 @@ function Step3Main({
 
   const displayName = uploadResult?.originalFileName ?? file?.name ?? "—";
 
-  const avgConfidence = uploadResult && uploadResult.detections.length > 0
-    ? uploadResult.detections.reduce((s, d) => s + d.confidence, 0) / uploadResult.detections.length
+  const detectionList = uploadResult?.detections ?? [];
+  const avgConfidence = detectionList.length > 0
+    ? detectionList.reduce((s, d) => s + d.confidence, 0) / detectionList.length
     : null;
 
   const seedVal = file?.seed ?? 0;
@@ -515,7 +516,7 @@ function Step3Main({
             <div className="text-[22px] font-extrabold text-[#1f2330] tracking-[-0.01em] mb-[8px]">
               {animatedCount}개
             </div>
-            {(uploadResult && uploadResult.detections.length > 0) || fileBoxes.some((b) => b.source === "manual") ? (
+            {((uploadResult?.detections?.length ?? 0) > 0 || fileBoxes.some((b) => b.source === "manual")) ? (
               <div className="flex flex-wrap justify-center gap-[4px]">
                 {(() => {
                   // reviewedBoxes가 있으면 살아남은 auto 박스만 기준으로 클래스 집계
@@ -908,7 +909,7 @@ export default function NewCasePage() {
             return new File([mosaicBlob], name, { type: mosaicBlob.type || "image/jpeg" });
           }
 
-          const res = await ImageApi.get(`/api/files/${fileId}`, { responseType: "arraybuffer" });
+          const res = await ApiClient.get(`/api/files/${fileId}`, { responseType: "arraybuffer" });
           const contentType = (res.headers as Record<string, string>)["content-type"] || "image/jpeg";
           const blob = new Blob([res.data as ArrayBuffer], { type: contentType });
           return new File([blob], name, { type: contentType });
