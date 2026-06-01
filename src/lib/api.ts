@@ -130,6 +130,42 @@ export const GetCases = async (page = 0, size = 10): Promise<CasePage> => {
   return response.data;
 };
 
+export interface FileListResponse {
+  id: string;
+  name: string;
+  type: string;
+  size: string;
+  uploadDate: string;
+  uploader: string;
+  category: string;
+  tags: string[];
+  description: string;
+  url: string;
+  downloadUrl: string;
+  thumbnail: string;
+  sharedWith: string[];
+}
+
+export interface CaseDetailResponse {
+  caseId: string;
+  caseNumber: string;
+  title: string;
+  description: string;
+  occurredAt: string | null;
+  assignedTo: string | null;
+  createdBy: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  sharedWith: string[];
+  files: FileListResponse[];
+}
+
+export const GetCaseDetail = async (caseId: string): Promise<CaseDetailResponse> => {
+  const response = await ApiClient.get(`/api/cases/${caseId}`);
+  return response.data;
+};
+
 export const PostCase = async (
   payload: CreateCasePayload,
 ): Promise<CaseResponse> => {
