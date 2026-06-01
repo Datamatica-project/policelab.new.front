@@ -10,7 +10,7 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import CaseCard from "@/components/cases/CaseCard";
-import { GetCases, type CaseResponse } from "@/lib/api";
+import { GetCases, type CaseResponse, type CaseAccessType } from "@/lib/api";
 import type { CaseData, CaseStatus } from "@/lib/case-data";
 
 const STATUS_MAP: Record<string, CaseStatus> = {
@@ -28,6 +28,7 @@ function toCaseData(c: CaseResponse): CaseData {
     description: c.description ?? "",
     manager: c.assignedTo ?? c.createdBy,
     date: c.occurredAt ? c.occurredAt.slice(0, 10) : c.createdAt.slice(0, 10),
+    sharedWith: c.sharedWith ?? [],
   };
 }
 
@@ -52,11 +53,18 @@ const SORT_LABELS: Record<string, string> = {
 
 const PAGE_SIZE = 12;
 
+const ACCESS_TABS: { label: string; value: CaseAccessType }[] = [
+  { label: "전체", value: "ALL" },
+  { label: "내 사건", value: "OWNED" },
+  { label: "공유받은 사건", value: "SHARED" },
+];
+
 export default function CasesPage() {
   const [cases, setCases] = useState<CaseData[]>([]);
   const [totalPages, setTotalPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(0); // 0-based (서버)
   const [isLoading, setIsLoading] = useState(false);
+  const [accessTab, setAccessTab] = useState<CaseAccessType>("ALL");
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchField, setSearchField] = useState("title");
@@ -67,7 +75,7 @@ export default function CasesPage() {
     const fetch = async () => {
       setIsLoading(true);
       try {
-        const data = await GetCases(currentPage, PAGE_SIZE);
+        const data = await GetCases(currentPage, PAGE_SIZE, accessTab);
         setCases(data.content.map(toCaseData));
         setTotalPages(data.totalPages);
       } catch {
@@ -77,7 +85,7 @@ export default function CasesPage() {
       }
     };
     fetch();
-  }, [currentPage]);
+  }, [currentPage, accessTab]);
 
   const filtered = useMemo(() => {
     let list = [...cases];
@@ -116,9 +124,27 @@ export default function CasesPage() {
       <h1 className="text-[32px] font-extrabold text-[#1f2330] tracking-[-0.02em] mb-2">
         사건관리
       </h1>
-      <p className="text-[14.5px] text-[#6b7388] mb-[26px]">
+      <p className="text-[14.5px] text-[#6b7388] mb-[18px]">
         사건 단위로 자료를 관리할 수 있습니다.
       </p>
+
+      {/* 접근 유형 탭 */}
+      <div className="flex items-center gap-[6px] mb-[22px]">
+        {ACCESS_TABS.map(({ label, value }) => (
+          <button
+            key={value}
+            onClick={() => { setAccessTab(value); setCurrentPage(0); }}
+            className={cn(
+              "px-[16px] py-[8px] rounded-[8px] text-[13.5px] font-semibold transition-colors",
+              accessTab === value
+                ? "bg-[#1d2c4e] text-white"
+                : "bg-white border border-[#e2e5ec] text-[#6b7388] hover:border-[#c5cbd9] hover:text-[#3a4055]",
+            )}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
       {/* Filter row */}
       <div className="flex items-center gap-3 mb-6 flex-wrap">
@@ -217,7 +243,7 @@ export default function CasesPage() {
       </div>
 
       {/* Pagination */}
-      <div className="flex items-center justify-center gap-[6px] py-2 pb-4">
+      {totalPages > 1 && <div className="flex items-center justify-center gap-[6px] py-2 pb-4">
         <button
           onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
           disabled={currentPage === 0}
@@ -248,7 +274,7 @@ export default function CasesPage() {
         >
           <ChevronRight size={14} />
         </button>
-      </div>
+      </div>}
     </div>
   );
 }
