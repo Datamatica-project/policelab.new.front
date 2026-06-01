@@ -275,6 +275,9 @@ export default function CaseFilesPage() {
 
   const statusLabel = STATUS_MAP[caseDetail?.status ?? ""] ?? "진행중";
 
+  const truncate = (str: string, max: number) =>
+    str.length > max ? str.slice(0, max) + "…" : str;
+
   // 현재 페이지 전체 선택 여부
   const isAllPageSelected =
     pageFiles.length > 0 && pageFiles.every((f) => selectedIds.has(f.id));
@@ -351,9 +354,10 @@ export default function CaseFilesPage() {
         <span className="text-[#c5cbd9]">&gt;</span>
         <button
           onClick={() => router.push("/cases")}
-          className="hover:text-[#1d2c4e] hover:underline transition-colors"
+          className="hover:text-[#1d2c4e] hover:underline transition-colors max-w-[240px] truncate"
+          title={caseDetail?.title}
         >
-          {caseDetail?.title ?? "..."}
+          {caseDetail ? truncate(caseDetail.title, 50) : "..."}
         </button>
         <span className="text-[#c5cbd9]">&gt;</span>
         <span className="text-[#1f2330] font-medium">파일</span>
@@ -456,10 +460,15 @@ export default function CaseFilesPage() {
           >
             {statusLabel}
           </span>
-          <div className="text-[22px] font-bold text-[#1f2330] tracking-[-0.01em] flex items-center">
-            <span>{caseDetail.title}</span>
-            <span className="text-[#c5cbd9] mx-2 font-normal">&gt;</span>
-            <span className="text-[#6b7388] font-medium text-[20px]">파일</span>
+          <div className="text-[22px] font-bold text-[#1f2330] tracking-[-0.01em] flex items-center min-w-0">
+            <span
+              className="truncate max-w-[480px]"
+              title={caseDetail.title.length > 50 ? caseDetail.title : undefined}
+            >
+              {truncate(caseDetail.title, 50)}
+            </span>
+            <span className="text-[#c5cbd9] mx-2 font-normal shrink-0">&gt;</span>
+            <span className="text-[#6b7388] font-medium text-[20px] shrink-0">파일</span>
           </div>
         </div>
       )}

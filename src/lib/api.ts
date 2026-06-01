@@ -64,6 +64,48 @@ ApiClient.interceptors.response.use(
   },
 );
 
+export interface UserResponse {
+  email: string;
+  name: string;
+  roles: string[];
+  status: string;
+}
+
+export const GetUserList = async (): Promise<UserResponse[]> => {
+  const response = await ApiClient.get("/api/auth/users");
+  return response.data.data as UserResponse[];
+};
+
+export const ShareCase = async (caseId: string, usernames: string[]): Promise<void> => {
+  await ApiClient.post(`/api/cases/${caseId}/shares`, { usernames });
+};
+
+export type UserRole = "USER" | "INSPECTOR" | "WORKER" | "ADMIN";
+
+export const PostJoin = async (
+  email: string,
+  name: string,
+  password: string,
+  role: UserRole,
+): Promise<void> => {
+  await ApiClient.post("/api/auth/join", { email, name, password, role });
+};
+
+export interface DashboardStats {
+  todayUploadCount: number;
+  yesterdayUploadCount: number;
+  lastUploadedAt: string | null;
+  categoryUploads: { photo: number; evidence: number; other: number };
+  weeklyUploads: { date: string; photo: number; evidence: number; other: number }[];
+  categoryDistribution: { category: string; count: number; percentage: number }[];
+  hourlyUploadsToday: { hour: string; uploads: number }[];
+}
+
+export const GetDashboardStats = async (): Promise<DashboardStats> => {
+  const response = await ApiClient.get("/api/files/dashboard");
+  return response.data;
+};
+
 export const PostLogin = async (email: string, password: string) => {
   const response = await ApiClient.post("/api/auth/login", { email, password });
   return response.data as {
@@ -81,6 +123,8 @@ export interface CreateCasePayload {
   assignedTo: string;
 }
 
+export type CaseAccessType = "OWNED" | "SHARED" | "ALL";
+
 export interface CaseResponse {
   caseId: string;
   caseNumber: string;
@@ -94,6 +138,7 @@ export interface CaseResponse {
   updatedAt: string;
   fileCount: number;
   sharedWith: string[];
+  accessType: "OWNED" | "SHARED";
 }
 
 export interface CasePage {
@@ -123,9 +168,13 @@ export const UpdateCase = async (
   return response.data;
 };
 
-export const GetCases = async (page = 0, size = 10): Promise<CasePage> => {
+export const GetCases = async (
+  page = 0,
+  size = 10,
+  typeShare: CaseAccessType = "ALL",
+): Promise<CasePage> => {
   const response = await ApiClient.get("/api/cases", {
-    params: { page, size },
+    params: { page, size, typeShare },
   });
   return response.data;
 };
