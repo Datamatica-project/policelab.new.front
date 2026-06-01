@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Search, ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -10,10 +10,26 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import CaseCard from "@/components/cases/CaseCard";
-import { ALL_CASES } from "@/lib/case-data";
-import type { CaseStatus } from "@/lib/case-data";
+import { GetCases, type CaseResponse } from "@/lib/api";
+import type { CaseData, CaseStatus } from "@/lib/case-data";
 
-const PER_PAGE = 12;
+const STATUS_MAP: Record<string, CaseStatus> = {
+  OPEN: "진행중",
+  UNDER_REVIEW: "검토중",
+  CLOSED: "사건종료",
+};
+
+function toCaseData(c: CaseResponse): CaseData {
+  return {
+    id: c.caseId,
+    caseNumber: c.caseNumber,
+    status: STATUS_MAP[c.status] ?? "진행중",
+    title: c.title,
+    description: c.description ?? "",
+    manager: c.assignedTo ?? c.createdBy,
+    date: c.occurredAt ? c.occurredAt.slice(0, 10) : c.createdAt.slice(0, 10),
+  };
+}
 
 const SEARCH_FIELD_LABELS: Record<string, string> = {
   title: "제목",
@@ -34,51 +50,66 @@ const SORT_LABELS: Record<string, string> = {
   title: "제목순",
 };
 
+const PAGE_SIZE = 12;
+
 export default function CasesPage() {
+  const [cases, setCases] = useState<CaseData[]>([]);
+  const [totalPages, setTotalPages] = useState(1);
+  const [currentPage, setCurrentPage] = useState(0); // 0-based (서버)
+  const [isLoading, setIsLoading] = useState(false);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [searchField, setSearchField] = useState("title");
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortOrder, setSortOrder] = useState("latest");
-  const [currentPage, setCurrentPage] = useState(1);
 
-  const resetPage = () => setCurrentPage(1);
+  useEffect(() => {
+    const fetch = async () => {
+      setIsLoading(true);
+      try {
+        const data = await GetCases(currentPage, PAGE_SIZE);
+        setCases(data.content.map(toCaseData));
+        setTotalPages(data.totalPages);
+      } catch {
+        setCases([]);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    fetch();
+  }, [currentPage]);
 
   const filtered = useMemo(() => {
-    let cases = [...ALL_CASES];
+    let list = [...cases];
     const q = searchQuery.toLowerCase().trim();
     if (q) {
-      cases = cases.filter((c) => {
+      list = list.filter((c) => {
         if (searchField === "title") return c.title.toLowerCase().includes(q);
         if (searchField === "manager") return c.manager.toLowerCase().includes(q);
-        return (
-          c.title.toLowerCase().includes(q) ||
-          c.description.toLowerCase().includes(q) ||
-          c.manager.toLowerCase().includes(q)
-        );
+        return c.title.toLowerCase().includes(q) || c.manager.toLowerCase().includes(q);
       });
     }
     if (statusFilter !== "all") {
-      cases = cases.filter((c) => c.status === (statusFilter as CaseStatus));
+      list = list.filter((c) => c.status === (statusFilter as CaseStatus));
     }
     if (sortOrder === "oldest") {
-      cases.sort((a, b) => a.date.localeCompare(b.date));
+      list.sort((a, b) => a.date.localeCompare(b.date));
     } else if (sortOrder === "title") {
-      cases.sort((a, b) => a.title.localeCompare(b.title));
+      list.sort((a, b) => a.title.localeCompare(b.title));
     } else {
-      cases.sort((a, b) => b.date.localeCompare(a.date));
+      list.sort((a, b) => b.date.localeCompare(a.date));
     }
-    return cases;
-  }, [searchQuery, searchField, statusFilter, sortOrder]);
+    return list;
+  }, [cases, searchQuery, searchField, statusFilter, sortOrder]);
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
-  const page = Math.min(currentPage, totalPages);
-  const pageCases = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+  // UI 페이지는 1-based
+  const uiPage = currentPage + 1;
 
   const pageNumbers = useMemo(() => {
     const count = Math.min(10, totalPages);
-    const start = Math.max(1, Math.min(page - 4, totalPages - count + 1));
+    const start = Math.max(1, Math.min(uiPage - 4, totalPages - count + 1));
     return Array.from({ length: count }, (_, i) => start + i);
-  }, [page, totalPages]);
+  }, [uiPage, totalPages]);
 
   return (
     <div className="pb-10">
@@ -159,21 +190,37 @@ export default function CasesPage() {
 
       {/* Cards grid */}
       <div className="grid grid-cols-4 gap-[18px] mb-9">
-        {pageCases.map((c) => (
-          <CaseCard key={c.id} {...c} />
-        ))}
-        {pageCases.length === 0 && (
+        {isLoading ? (
+          <div className="col-span-4 text-center py-16 text-[#9aa1b3] text-[13.5px]">
+            불러오는 중...
+          </div>
+        ) : filtered.length === 0 ? (
           <div className="col-span-4 text-center py-16 text-[#9aa1b3] text-[13.5px]">
             조건에 맞는 사건이 없습니다.
           </div>
+        ) : (
+          filtered.map((c) => (
+            <CaseCard
+              key={c.id}
+              {...c}
+              onDelete={(deletedId) =>
+                setCases((prev) => prev.filter((x) => x.id !== deletedId))
+              }
+              onUpdate={(updatedId, updated) =>
+                setCases((prev) =>
+                  prev.map((x) => (x.id === updatedId ? { ...x, ...updated } : x)),
+                )
+              }
+            />
+          ))
         )}
       </div>
 
       {/* Pagination */}
       <div className="flex items-center justify-center gap-[6px] py-2 pb-4">
         <button
-          onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-          disabled={page === 1}
+          onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
+          disabled={currentPage === 0}
           className="min-w-[34px] h-[34px] px-[10px] border border-[#e2e5ec] rounded-[6px] bg-white text-[#6b7388] flex items-center justify-center hover:border-[#c5cbd9] hover:bg-[#f7f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           <ChevronLeft size={14} />
@@ -182,10 +229,10 @@ export default function CasesPage() {
         {pageNumbers.map((n) => (
           <button
             key={n}
-            onClick={() => setCurrentPage(n)}
+            onClick={() => setCurrentPage(n - 1)}
             className={cn(
               "min-w-[34px] h-[34px] px-[10px] border rounded-[6px] text-[13px] font-medium flex items-center justify-center transition-colors",
-              n === page
+              n === uiPage
                 ? "bg-[#1d2c4e] border-[#1d2c4e] text-white"
                 : "bg-white border-[#e2e5ec] text-[#3a4055] hover:border-[#c5cbd9] hover:bg-[#f7f8fb]",
             )}
@@ -195,8 +242,8 @@ export default function CasesPage() {
         ))}
 
         <button
-          onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-          disabled={page === totalPages}
+          onClick={() => setCurrentPage((p) => Math.min(totalPages - 1, p + 1))}
+          disabled={currentPage >= totalPages - 1}
           className="min-w-[34px] h-[34px] px-[10px] border border-[#e2e5ec] rounded-[6px] bg-white text-[#6b7388] flex items-center justify-center hover:border-[#c5cbd9] hover:bg-[#f7f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           <ChevronRight size={14} />

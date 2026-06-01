@@ -2,6 +2,7 @@ export type CaseStatus = "검토중" | "진행중" | "사건종료";
 
 export interface CaseData {
   id: string;
+  caseNumber: string;
   status: CaseStatus;
   title: string;
   description: string;
@@ -48,6 +49,7 @@ export const ALL_CASES: CaseData[] = (() => {
     const day = String(1 + Math.floor(rand() * 28)).padStart(2, "0");
     return {
       id: String(1000 + i),
+      caseNumber: `2026-${String(1001 + i).padStart(4, "0")}`,
       status,
       title: `${region} 사건`,
       description: `${region}의 사건파일 입니다.`,
