@@ -23,8 +23,8 @@ export interface CaseSessionData {
   step: 3 | 4;
   caseNumber: string;
   caseName: string;
-  rank: string;
-  officer: string;
+  assignedTo: string;
+  assignedToName: string;
   desc: string;
   files: SessionFile[];
   reviewedBoxes: Record<number, BBox[]>;

@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { ApiClient, PostCase, PostFiles, PostReplace, type FileUploadResult, type Detection, type ReplaceFileResult } from "@/lib/api";
+import { ApiClient, PostCase, PostFiles, PostReplace, GetUserList, type FileUploadResult, type Detection, type ReplaceFileResult, type UserResponse } from "@/lib/api";
 import {
   saveCaseSession,
   loadCaseSession,
@@ -53,14 +53,16 @@ interface UploadedFile {
 interface CaseFormData {
   caseNumber: string;
   caseName: string;
-  rank: string;
-  officer: string;
+  assignedTo: string;
+  assignedToName: string;
   desc: string;
   files: UploadedFile[];
 }
 
 /* ─────────────────── constants ─────────────── */
-const RANK_OPTIONS = ["순경", "경장", "경사", "경위", "경감", "경정", "총경"];
+const ROLE_LABEL: Record<string, string> = {
+  ADMIN: "관리자", USER: "사용자", INSPECTOR: "감사관", WORKER: "담당자",
+};
 
 const CATEGORY_OPTIONS = [
   { value: "evidence", label: "증거 자료" },
@@ -673,10 +675,27 @@ export default function NewCasePage() {
   // Step 1
   const [caseNumber, setCaseNumber] = useState("");
   const [caseName, setCaseName] = useState("");
-  const [rank, setRank] = useState("");
-  const [officer, setOfficer] = useState("");
-  const assignedTo = [rank, officer].filter(Boolean).join(" ");
+  const [assignedTo, setAssignedTo] = useState("");       // email
+  const [assignedToName, setAssignedToName] = useState(""); // 표시용 이름
   const [desc, setDesc] = useState("");
+
+  // 담당자 선택 드롭다운
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerUsers, setPickerUsers] = useState<UserResponse[]>([]);
+  const [pickerSearch, setPickerSearch] = useState("");
+  const [pickerFetched, setPickerFetched] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const handle = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setPickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [pickerOpen]);
 
   // Step 2
   const [files, setFiles] = useState<UploadedFile[]>([]);
@@ -736,8 +755,8 @@ export default function NewCasePage() {
 
     setCaseNumber(session.caseNumber);
     setCaseName(session.caseName);
-    setRank(session.rank);
-    setOfficer(session.officer);
+    setAssignedTo(session.assignedTo ?? "");
+    setAssignedToName(session.assignedToName ?? "");
     setDesc(session.desc);
     setCreatedCaseId(session.caseId);
     setReviewedBoxes((session.reviewedBoxes as Record<number, BBox[]>) ?? {});
@@ -790,8 +809,8 @@ export default function NewCasePage() {
       step,
       caseNumber,
       caseName,
-      rank,
-      officer,
+      assignedTo,
+      assignedToName,
       desc,
       files: files.map(({ id, name, sizeMB, seed, category, tags, policy, description, uploadResult }) => ({
         id, name, sizeMB, seed, category, tags, policy, description, uploadResult,
@@ -799,9 +818,9 @@ export default function NewCasePage() {
       reviewedBoxes,
       replaceResults,
     });
-  }, [step, reviewedBoxes, files, createdCaseId, caseNumber, caseName, rank, officer, desc]);
+  }, [step, reviewedBoxes, files, createdCaseId, caseNumber, caseName, assignedTo, assignedToName, desc]);
 
-  const formData: CaseFormData = { caseNumber, caseName, rank, officer, desc, files };
+  const formData: CaseFormData = { caseNumber, caseName, assignedTo, assignedToName, desc, files };
 
   const isStep2Ready =
     files.length > 0 &&
@@ -848,6 +867,10 @@ export default function NewCasePage() {
       toast.error("사건명을 입력해주세요.");
       return;
     }
+    if (!assignedTo) {
+      toast.error("사건 담당자를 선택해주세요.");
+      return;
+    }
     setStep(2);
   };
 
@@ -859,7 +882,7 @@ export default function NewCasePage() {
         title: caseName,
         description: desc,
         occurredAt: new Date().toISOString().slice(0, 19),
-        assignedTo: [rank, officer].filter(Boolean).join(" "),
+        assignedTo,
       });
 
       const caseId = caseRes.caseId;
@@ -1101,24 +1124,103 @@ export default function NewCasePage() {
                 />
               </div>
               <div className="col-span-2 flex flex-col gap-[6px]">
-                <label className="text-[13px] font-semibold text-[#3a4055]">사건 담당자 <span className="text-[#9aa1b3] font-normal">(선택)</span></label>
-                <div className="flex gap-[8px]">
-                  <select
-                    value={rank}
-                    onChange={(e) => setRank(e.target.value)}
-                    className="px-[12px] py-[11px] border border-[#d9deea] rounded-[8px] text-[13.5px] text-[#1f2330] outline-none focus:border-[#1d2c4e] bg-white transition-colors shrink-0"
+                <label className="text-[13px] font-semibold text-[#3a4055]">
+                  사건 담당자 <span className="text-[#d33b3b]">*</span>
+                </label>
+                <div ref={pickerRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setPickerOpen((v) => !v);
+                      if (!pickerFetched) {
+                        setPickerFetched(true);
+                        try {
+                          const users = await GetUserList();
+                          setPickerUsers(users);
+                        } catch {
+                          toast.error("사용자 목록을 불러오지 못했습니다.");
+                        }
+                      }
+                    }}
+                    className="w-full flex items-center gap-[10px] px-[14px] py-[11px] border border-[#d9deea] rounded-[8px] text-[13.5px] outline-none focus:border-[#1d2c4e] transition-colors bg-white text-left"
                   >
-                    <option value="">직책</option>
-                    {RANK_OPTIONS.map((r) => (
-                      <option key={r} value={r}>{r}</option>
-                    ))}
-                  </select>
-                  <input
-                    className="flex-1 px-[14px] py-[11px] border border-[#d9deea] rounded-[8px] text-[13.5px] text-[#1f2330] outline-none focus:border-[#1d2c4e] placeholder:text-[#9aa1b3] transition-colors"
-                    value={officer}
-                    onChange={(e) => setOfficer(e.target.value)}
-                    placeholder="홍길동"
-                  />
+                    {assignedTo ? (
+                      <>
+                        <div className="w-6 h-6 rounded-full bg-[#e8ecf4] flex items-center justify-center text-[11px] font-bold text-[#1d2c4e] shrink-0">
+                          {assignedToName[0]}
+                        </div>
+                        <span className="text-[#1f2330] font-medium">{assignedToName}</span>
+                        <span className="text-[#9aa1b3] text-[12px]">{assignedTo}</span>
+                      </>
+                    ) : (
+                      <span className="text-[#9aa1b3]">담당자를 선택하세요</span>
+                    )}
+                  </button>
+
+                  {pickerOpen && (
+                    <div
+                      className="absolute top-[calc(100%+4px)] left-0 right-0 z-50 bg-white border border-[#e2e5ec] rounded-[10px] shadow-[0_8px_24px_rgba(15,22,40,0.12)] overflow-hidden"
+                      onMouseDown={(e) => e.preventDefault()}
+                    >
+                      <div className="p-[10px] border-b border-[#eef0f5]">
+                        <input
+                          autoFocus
+                          type="text"
+                          placeholder="이름 또는 이메일 검색..."
+                          value={pickerSearch}
+                          onChange={(e) => setPickerSearch(e.target.value)}
+                          className="w-full px-[12px] py-[8px] border border-[#d9deea] rounded-[7px] text-[13px] outline-none focus:border-[#1d2c4e] placeholder:text-[#9aa1b3]"
+                        />
+                      </div>
+                      <div className="max-h-[220px] overflow-y-auto">
+                        {pickerUsers
+                          .filter((u) => {
+                            const q = pickerSearch.toLowerCase();
+                            return !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+                          })
+                          .map((u) => (
+                            <button
+                              key={u.email}
+                              type="button"
+                              onClick={() => {
+                                setAssignedTo(u.email);
+                                setAssignedToName(u.name);
+                                setPickerOpen(false);
+                                setPickerSearch("");
+                              }}
+                              className="w-full flex items-center gap-[10px] px-[14px] py-[10px] hover:bg-[#f7f8fb] transition-colors text-left"
+                            >
+                              <div className="w-7 h-7 rounded-full bg-[#e8ecf4] flex items-center justify-center text-[12px] font-bold text-[#1d2c4e] shrink-0">
+                                {u.name[0]}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-[6px]">
+                                  <span className="text-[13.5px] font-semibold text-[#1f2330]">{u.name}</span>
+                                  <span className="text-[11px] px-[6px] py-[1px] bg-[#f0f4fa] text-[#4a5e8a] rounded-full font-medium">
+                                    {ROLE_LABEL[u.roles[0]] ?? u.roles[0]}
+                                  </span>
+                                </div>
+                                <p className="text-[12px] text-[#9aa1b3] truncate">{u.email}</p>
+                              </div>
+                              {assignedTo === u.email && (
+                                <div className="w-4 h-4 rounded-full bg-[#1d2c4e] flex items-center justify-center shrink-0">
+                                  <svg width="8" height="6" viewBox="0 0 8 6" fill="none">
+                                    <path d="M1 3l2 2 4-4" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                  </svg>
+                                </div>
+                              )}
+                            </button>
+                          ))
+                        }
+                        {pickerUsers.length > 0 && pickerUsers.filter((u) => {
+                          const q = pickerSearch.toLowerCase();
+                          return !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+                        }).length === 0 && (
+                          <div className="py-8 text-center text-[13px] text-[#9aa1b3]">검색 결과가 없습니다.</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="col-span-2 flex flex-col gap-[6px]">
@@ -1147,7 +1249,7 @@ export default function NewCasePage() {
                 { k: "사건 번호", v: caseNumber || "—" },
                 { k: "사건명", v: caseName || "—" },
                 { k: "생성 날짜", v: TODAY },
-                { k: "사건 담당자", v: assignedTo || "—" },
+                { k: "사건 담당자", v: assignedToName || "—" },
                 { k: "사건 설명", v: desc || "—" },
               ].map(({ k, v }) => (
                 <div key={k} className="grid text-[13.5px] py-[10px] border-b border-[#f0f1f5] last:border-b-0" style={{ gridTemplateColumns: "110px 1fr" }}>
@@ -1456,7 +1558,7 @@ export default function NewCasePage() {
                 { k: "사건 번호", v: caseNumber || "—" },
                 { k: "사건명", v: caseName || "—" },
                 { k: "생성 날짜", v: TODAY },
-                { k: "사건 담당자", v: assignedTo || "—" },
+                { k: "사건 담당자", v: assignedToName || "—" },
                 { k: "파일 개수", v: `${files.length}개` },
                 { k: "총 용량", v: `${totalSize.toFixed(1)}MB` },
                 { k: "사건 설명", v: desc || "—" },
@@ -1495,7 +1597,7 @@ export default function NewCasePage() {
         <Step3Complete
           caseName={caseName}
           caseNumber={caseNumber}
-          officer={assignedTo}
+          officer={assignedToName}
           files={files}
           replaceResults={replaceResults}
           reviewedBoxes={reviewedBoxes}
