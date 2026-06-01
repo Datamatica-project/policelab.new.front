@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { useAuthStore } from "@/store/authStore";
+import { useCaseStore } from "@/store/caseStore";
 import { ApiClient, GetCases } from "@/lib/api";
 import { toast } from "sonner";
 
@@ -20,7 +21,7 @@ export default function Sidebar() {
   const { logout, email } = useAuthStore();
 
   const [expanded, setExpanded] = useState<ExpandedMenu>(null);
-  const [cases, setCases] = useState<{ id: string; title: string }[]>([]);
+  const { sidebarCases, setSidebarCases } = useCaseStore();
   const hasFetched = useRef(false);
 
   const isDashboardRoute = pathname === "/dashboard";
@@ -34,16 +35,16 @@ export default function Sidebar() {
     else if (isCasesRoute) setExpanded("cases");
   }, [isDashboardRoute, isCasesRoute]);
 
-  // 사건 목록: cases 메뉴가 처음 펼쳐질 때 한 번만 fetch
+  // 사건 목록: 스토어에 없을 때만 fetch (cases 페이지 방문 시 자동 동기화)
   useEffect(() => {
-    if (expanded !== "cases" || hasFetched.current) return;
+    if (expanded !== "cases" || hasFetched.current || sidebarCases.length > 0) return;
     hasFetched.current = true;
     GetCases(0, 10)
       .then((data) =>
-        setCases(data.content.map((c) => ({ id: c.caseId, title: c.title })))
+        setSidebarCases(data.content.map((c) => ({ id: c.caseId, title: c.title })))
       )
       .catch(() => {});
-  }, [expanded]);
+  }, [expanded, sidebarCases.length]);
 
   const handleDashboardClick = () => {
     if (isDashboardRoute) {
@@ -88,12 +89,20 @@ export default function Sidebar() {
   return (
     <aside className="w-[220px] min-h-screen bg-[#1B1B4B] flex flex-col shrink-0">
       {/* Logo */}
-      <div className="flex items-center gap-2.5 px-5 py-6">
-        <Image src="/policeLogo.png" alt="로고" width={45} height={45} />
-        <span className="text-white font-semibold text-m leading-tight">
-          비식별 엔진
-        </span>
-      </div>
+      <button
+        onClick={() => router.push("/dashboard")}
+        className="flex items-center gap-2.5 px-5 py-6 cursor-pointer text-left"
+      >
+        <Image src="/policeLogo.png" alt="로고" width={104} height={104} style={{ width: 52, height: 52 }} />
+        <div className="flex flex-col gap-[2px]">
+          <span className="text-white leading-tight" style={{ fontFamily: "'Aggravo', sans-serif", fontWeight: 700, fontSize: 17 }}>
+            비식별 엔진
+          </span>
+          <span className="text-white/40 leading-tight" style={{ fontFamily: "'Aggravo', sans-serif", fontWeight: 300, fontSize: 10, letterSpacing: "0.04em" }}>
+            De-identification Engine
+          </span>
+        </div>
+      </button>
 
       {/* Navigation */}
       <nav className="flex-1 px-3 overflow-y-auto space-y-0.5">
@@ -176,12 +185,12 @@ export default function Sidebar() {
           >
             <div className="overflow-hidden">
               <div className="mt-[2px] ml-[10px] flex flex-col border-l border-white/10 pl-[6px] pb-[2px]">
-                {cases.length === 0 ? (
+                {sidebarCases.length === 0 ? (
                   <span className="px-3 py-2 text-[12px] text-white/25">
                     사건 없음
                   </span>
                 ) : (
-                  cases.map((c) => (
+                  sidebarCases.map((c) => (
                     <button
                       key={c.id}
                       onClick={() => router.push(`/cases/${c.id}`)}

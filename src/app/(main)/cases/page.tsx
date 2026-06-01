@@ -12,6 +12,7 @@ import {
 import CaseCard from "@/components/cases/CaseCard";
 import { GetCases, type CaseResponse, type CaseAccessType } from "@/lib/api";
 import type { CaseData, CaseStatus } from "@/lib/case-data";
+import { useCaseStore } from "@/store/caseStore";
 
 const STATUS_MAP: Record<string, CaseStatus> = {
   OPEN: "진행중",
@@ -60,6 +61,7 @@ const ACCESS_TABS: { label: string; value: CaseAccessType }[] = [
 ];
 
 export default function CasesPage() {
+  const { setSidebarCases } = useCaseStore();
   const [cases, setCases] = useState<CaseData[]>([]);
   const [totalPages, setTotalPages] = useState(1);
   const [currentPage, setCurrentPage] = useState(0); // 0-based (서버)
@@ -76,8 +78,13 @@ export default function CasesPage() {
       setIsLoading(true);
       try {
         const data = await GetCases(currentPage, PAGE_SIZE, accessTab);
-        setCases(data.content.map(toCaseData));
+        const mapped = data.content.map(toCaseData);
+        setCases(mapped);
         setTotalPages(data.totalPages);
+        // 첫 페이지 전체 탭일 때만 사이드바 동기화
+        if (currentPage === 0 && accessTab === "ALL") {
+          setSidebarCases(data.content.map((c) => ({ id: c.caseId, title: c.title })));
+        }
       } catch {
         setCases([]);
       } finally {
