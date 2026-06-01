@@ -8,6 +8,7 @@ export interface CaseData {
   description: string;
   manager: string;
   date: string;
+  sharedWith?: string[];
 }
 
 export interface FileData {
