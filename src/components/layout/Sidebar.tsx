@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { LayoutDashboard, Folder, Share2, LogOut, Shield } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Image from "next/image";
 import { useAuthStore } from "@/store/authStore";
+import { ApiClient } from "@/lib/api";
+import { toast } from "sonner";
 
 const navItems = [
   { label: "대시보드", href: "/dashboard", icon: LayoutDashboard },
@@ -15,11 +17,39 @@ const navItems = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { logout } = useAuthStore();
 
-  const handleLogout = () => {
-    logout();
-    window.location.replace("/login");
+  const handleLogout = async () => {
+    try {
+      await ApiClient.post("/api/auth/logout");
+      logout();
+      router.replace("/login");
+    } catch (error: unknown) {
+      const status =
+        // 에러가 객체이며, 객체 속에 "response" 값이 있을 경우를 검사
+        error instanceof Object && "response" in error
+          ? // error의 객체 타입을 강제로 지정해 status값을 뽑아낸다.
+            (error as { response?: { status?: number } }).response?.status
+          : undefined; // 에러가 객체값이 아닐경우 그냥 undefined를 넣고 종료
+
+      logout();
+
+      if (status === 401) {
+        // 이미 만료된 토큰 — 조용히 로그아웃
+        router.replace("/login");
+        return;
+      }
+
+      // 서버 오류: 서버 세션이 남아있을 수 있음을 경고 후 로그아웃
+      toast.warning(
+        "서버 로그아웃에 실패했습니다. 브라우저 세션만 종료됩니다.",
+        {
+          duration: 2000,
+        },
+      );
+      setTimeout(() => router.replace("/login"), 2000);
+    }
   };
 
   return (

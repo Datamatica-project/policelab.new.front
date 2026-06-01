@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { PostLogin } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 
@@ -57,6 +58,7 @@ function EyeIcon(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
+// 로그인 페이지는 로그인 기능만 담당하며 페이지 렌더링 전 인증 여부 판단은 middleWare 파일에서 담당한다.
 export default function LoginPage() {
   const SAVED_ID_KEY = "saved_login_id";
 
@@ -67,7 +69,8 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  const { login, token } = useAuthStore();
+  const { login } = useAuthStore();
+  const router = useRouter();
 
   // 저장된 아이디 복원
   useEffect(() => {
@@ -77,11 +80,6 @@ export default function LoginPage() {
       setRemember(true);
     }
   }, []);
-
-  // 이미 로그인된 경우
-  useEffect(() => {
-    if (token) window.location.replace("/dashboard");
-  }, [token]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,13 +92,15 @@ export default function LoginPage() {
     try {
       const res = await PostLogin(id, pw);
       if (res.resultCode === "SUCCESS") {
+        // 아이디 저장 체크박스 유지 용도
         if (remember) {
           localStorage.setItem(SAVED_ID_KEY, id);
         } else {
           localStorage.removeItem(SAVED_ID_KEY);
         }
+        // store에 엑세스 토큰과 이메일을 저장한다.
         login(res.data.accessToken, res.data.email);
-        window.location.replace("/dashboard");
+        router.replace("/dashboard");
       } else {
         setError(res.resultMessage || "로그인에 실패했습니다.");
       }
