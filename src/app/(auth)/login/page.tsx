@@ -357,6 +357,19 @@ export default function LoginPage() {
             </div>
           )}
 
+          {/* 회원가입 링크 */}
+          <p className="text-center mb-5" style={{ fontSize: 13.5, color: "#6b7388" }}>
+            계정이 없으신가요?{" "}
+            <button
+              type="button"
+              onClick={() => router.push("/signup")}
+              className="font-bold hover:underline"
+              style={{ color: "#1d2c4e", background: "none", border: "none", cursor: "pointer" }}
+            >
+              회원가입
+            </button>
+          </p>
+
           {/* Submit */}
           <button
             type="submit"
