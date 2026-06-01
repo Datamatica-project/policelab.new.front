@@ -1,5 +1,5 @@
 import Sidebar from "@/components/layout/Sidebar";
-import Topbar from "@/components/layout/Topbar";
+import Footer from "@/components/layout/Footer";
 
 export default function MainLayout({
   children,
@@ -9,14 +9,14 @@ export default function MainLayout({
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <div className="flex flex-col flex-1 overflow-hidden">
-        <Topbar />
-        <main className="flex-1 overflow-y-auto bg-gray-50">
-          <div className="max-w-[1200px] mx-auto px-8 pt-[60px]">
+      <main className="flex-1 overflow-y-auto bg-gray-50">
+        <div className="flex flex-col min-h-full">
+          <div className="max-w-[1200px] w-full mx-auto px-8 pt-[60px] flex-1">
             {children}
           </div>
-        </main>
-      </div>
+          <Footer />
+        </div>
+      </main>
     </div>
   );
 }

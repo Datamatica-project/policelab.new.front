@@ -1,24 +1,67 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutDashboard, Folder, Share2, LogOut, Shield } from "lucide-react";
+import { LayoutDashboard, Folder, LogOut, ChevronRight, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
 import { useAuthStore } from "@/store/authStore";
-import { ApiClient } from "@/lib/api";
+import { ApiClient, GetCases } from "@/lib/api";
 import { toast } from "sonner";
 
-const navItems = [
-  { label: "대시보드", href: "/dashboard", icon: LayoutDashboard },
-  { label: "사건관리", href: "/cases", icon: Folder },
-  { label: "공유관리", href: "/shared", icon: Share2 },
-];
+const truncate = (str: string, max: number) =>
+  str.length > max ? str.slice(0, max) + "…" : str;
+
+type ExpandedMenu = "dashboard" | "cases" | null;
 
 export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { logout } = useAuthStore();
+  const { logout, email } = useAuthStore();
+
+  const [expanded, setExpanded] = useState<ExpandedMenu>(null);
+  const [cases, setCases] = useState<{ id: string; title: string }[]>([]);
+  const hasFetched = useRef(false);
+
+  const isDashboardRoute = pathname === "/dashboard";
+  const isCasesRoute = pathname === "/cases" || pathname.startsWith("/cases/");
+  const activeCaseId =
+    pathname.startsWith("/cases/") ? pathname.split("/")[2] : null;
+
+  // 경로 변경 시 해당 메뉴 자동 펼침 (상대 메뉴는 닫힘)
+  useEffect(() => {
+    if (isDashboardRoute) setExpanded("dashboard");
+    else if (isCasesRoute) setExpanded("cases");
+  }, [isDashboardRoute, isCasesRoute]);
+
+  // 사건 목록: cases 메뉴가 처음 펼쳐질 때 한 번만 fetch
+  useEffect(() => {
+    if (expanded !== "cases" || hasFetched.current) return;
+    hasFetched.current = true;
+    GetCases(0, 10)
+      .then((data) =>
+        setCases(data.content.map((c) => ({ id: c.caseId, title: c.title })))
+      )
+      .catch(() => {});
+  }, [expanded]);
+
+  const handleDashboardClick = () => {
+    if (isDashboardRoute) {
+      setExpanded((v) => (v === "dashboard" ? null : "dashboard"));
+    } else {
+      router.push("/dashboard");
+      setExpanded("dashboard");
+    }
+  };
+
+  const handleCasesClick = () => {
+    if (isCasesRoute) {
+      setExpanded((v) => (v === "cases" ? null : "cases"));
+    } else {
+      router.push("/cases");
+      setExpanded("cases");
+    }
+  };
 
   const handleLogout = async () => {
     try {
@@ -27,27 +70,17 @@ export default function Sidebar() {
       router.replace("/login");
     } catch (error: unknown) {
       const status =
-        // 에러가 객체이며, 객체 속에 "response" 값이 있을 경우를 검사
         error instanceof Object && "response" in error
-          ? // error의 객체 타입을 강제로 지정해 status값을 뽑아낸다.
-            (error as { response?: { status?: number } }).response?.status
-          : undefined; // 에러가 객체값이 아닐경우 그냥 undefined를 넣고 종료
-
+          ? (error as { response?: { status?: number } }).response?.status
+          : undefined;
       logout();
-
       if (status === 401) {
-        // 이미 만료된 토큰 — 조용히 로그아웃
         router.replace("/login");
         return;
       }
-
-      // 서버 오류: 서버 세션이 남아있을 수 있음을 경고 후 로그아웃
-      toast.warning(
-        "서버 로그아웃에 실패했습니다. 브라우저 세션만 종료됩니다.",
-        {
-          duration: 2000,
-        },
-      );
+      toast.warning("서버 로그아웃에 실패했습니다. 브라우저 세션만 종료됩니다.", {
+        duration: 2000,
+      });
       setTimeout(() => router.replace("/login"), 2000);
     }
   };
@@ -63,32 +96,128 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 space-y-0.5">
-        {navItems.map(({ label, href, icon: Icon }) => {
-          const isActive = pathname === href || pathname.startsWith(href + "/");
-          return (
-            <Link
-              key={href}
-              href={href}
+      <nav className="flex-1 px-3 overflow-y-auto space-y-0.5">
+
+        {/* 대시보드 */}
+        <div>
+          <button
+            onClick={handleDashboardClick}
+            className={cn(
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors",
+              isDashboardRoute
+                ? "bg-[#062864] text-white font-medium border-l-[3px] border-[#FBC707]"
+                : "text-white/60 hover:text-white hover:bg-white/10",
+            )}
+          >
+            <LayoutDashboard
+              size={16}
+              className={isDashboardRoute ? "text-[#FBC707]" : ""}
+            />
+            <span className="flex-1 text-left">대시보드</span>
+            <ChevronRight
+              size={13}
               className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors",
-                isActive
-                  ? "bg-[#062864] text-white font-medium border-l-3 border-[#FBC707]"
-                  : "text-white/60 hover:text-white hover:bg-white/10",
+                "transition-transform duration-200 shrink-0",
+                expanded === "dashboard" && "rotate-90",
+                isDashboardRoute ? "text-white/50" : "text-white/20",
               )}
-            >
-              <Icon
-                size={16}
-                className={cn(isActive ? "text-[#FBC707]" : "inherit")}
-              />
-              {label}
-            </Link>
-          );
-        })}
+            />
+          </button>
+
+          {/* 대시보드 하위 목록 */}
+          <div
+            className="grid transition-[grid-template-rows] duration-300 ease-in-out"
+            style={{ gridTemplateRows: expanded === "dashboard" ? "1fr" : "0fr" }}
+          >
+            <div className="overflow-hidden">
+              <div className="mt-[2px] ml-[10px] flex flex-col border-l border-white/10 pl-[6px] pb-[2px]">
+                <button
+                  onClick={() => router.push("/cases/new")}
+                  className="text-left flex items-center gap-[6px] px-3 py-[6px] rounded-[6px] text-[12.5px] text-white/45 hover:text-white hover:bg-white/10 transition-colors w-full"
+                >
+                  <Plus size={12} className="shrink-0" />
+                  새 사건 생성
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 사건관리 */}
+        <div>
+          <button
+            onClick={handleCasesClick}
+            className={cn(
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors",
+              isCasesRoute
+                ? "bg-[#062864] text-white font-medium border-l-[3px] border-[#FBC707]"
+                : "text-white/60 hover:text-white hover:bg-white/10",
+            )}
+          >
+            <Folder
+              size={16}
+              className={isCasesRoute ? "text-[#FBC707]" : ""}
+            />
+            <span className="flex-1 text-left">사건관리</span>
+            <ChevronRight
+              size={13}
+              className={cn(
+                "transition-transform duration-200 shrink-0",
+                expanded === "cases" && "rotate-90",
+                isCasesRoute ? "text-white/50" : "text-white/20",
+              )}
+            />
+          </button>
+
+          {/* 사건관리 하위 목록 */}
+          <div
+            className="grid transition-[grid-template-rows] duration-300 ease-in-out"
+            style={{ gridTemplateRows: expanded === "cases" ? "1fr" : "0fr" }}
+          >
+            <div className="overflow-hidden">
+              <div className="mt-[2px] ml-[10px] flex flex-col border-l border-white/10 pl-[6px] pb-[2px]">
+                {cases.length === 0 ? (
+                  <span className="px-3 py-2 text-[12px] text-white/25">
+                    사건 없음
+                  </span>
+                ) : (
+                  cases.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => router.push(`/cases/${c.id}`)}
+                      title={c.title}
+                      className={cn(
+                        "text-left px-3 py-[6px] rounded-[6px] text-[12.5px] transition-colors w-full truncate",
+                        activeCaseId === c.id
+                          ? "text-white bg-white/10 font-medium"
+                          : "text-white/45 hover:text-white hover:bg-white/10",
+                      )}
+                    >
+                      {truncate(c.title, 10)}
+                    </button>
+                  ))
+                )}
+                <button
+                  onClick={() => router.push("/cases")}
+                  className="text-left px-3 py-[6px] mt-[4px] text-[12px] text-white/30 hover:text-white/60 transition-colors border-t border-white/10 pt-[8px]"
+                >
+                  전체보기 →
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </nav>
 
-      {/* Logout */}
-      <div className="px-3 pb-6">
+      {/* User + Logout */}
+      <div className="px-3 pb-6 flex flex-col gap-1">
+        <div className="px-3 py-2 flex items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-[11px] font-bold text-white shrink-0">
+            {email?.[0]?.toUpperCase() ?? "?"}
+          </div>
+          <span className="text-[12px] text-white/40 truncate">{email ?? "—"}</span>
+        </div>
         <button
           onClick={handleLogout}
           className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-white/50 hover:text-white hover:bg-white/10 w-full transition-colors"
