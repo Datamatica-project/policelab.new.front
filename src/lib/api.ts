@@ -11,13 +11,8 @@ export function setAuthStoreGetter(fn: typeof getAuthStore) {
   getAuthStore = fn;
 }
 
-export const AuthApi = axios.create({
+export const ApiClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL,
-  withCredentials: true,
-});
-
-export const ImageApi = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_IMAGE_API_URL,
   withCredentials: true,
 });
 
@@ -25,35 +20,40 @@ export const MosaicApi = axios.create({
   baseURL: process.env.NEXT_PUBLIC_MOSAIC_API_URL,
 });
 
-const attachToken = (config: Parameters<Parameters<typeof AuthApi.interceptors.request.use>[0]>[0]) => {
+ApiClient.interceptors.request.use((config) => {
   const token = getAuthStore?.().token;
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
-};
+});
 
-AuthApi.interceptors.request.use(attachToken);
-ImageApi.interceptors.request.use(attachToken);
-
-AuthApi.interceptors.response.use(
+ApiClient.interceptors.response.use(
   (response) => response,
-  async (error) => {
-    const originalRequest = error.config;
+  async (error: unknown) => {
+    const axiosError = error as {
+      config?: { _retry?: boolean; url?: string; headers?: Record<string, string> };
+      response?: { status?: number };
+    };
+    const originalRequest = axiosError.config;
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (
+      axiosError.response?.status === 401 &&
+      originalRequest &&
+      !originalRequest._retry &&
+      !originalRequest.url?.includes("/auth/login")
+    ) {
       originalRequest._retry = true;
 
       try {
-        const response = await AuthApi.get("/api/auth/refresh");
-        const { accessToken, email } = response.data;
+        const response = await ApiClient.get("/api/auth/refresh");
+        const { accessToken, email } = response.data.data;
 
         getAuthStore?.().login(accessToken, email);
-        AuthApi.defaults.headers.common["Authorization"] =
-          `Bearer ${accessToken}`;
-        originalRequest.headers["Authorization"] = `Bearer ${accessToken}`;
+        ApiClient.defaults.headers.common["Authorization"] = `Bearer ${accessToken}`;
+        originalRequest.headers!["Authorization"] = `Bearer ${accessToken}`;
 
-        return AuthApi(originalRequest);
+        return ApiClient(originalRequest as Parameters<typeof ApiClient>[0]);
       } catch {
         getAuthStore?.().logout();
         return Promise.reject(error);
@@ -65,7 +65,7 @@ AuthApi.interceptors.response.use(
 );
 
 export const PostLogin = async (email: string, password: string) => {
-  const response = await AuthApi.post("/api/auth/login", { email, password });
+  const response = await ApiClient.post("/api/auth/login", { email, password });
   return response.data as {
     resultCode: string;
     resultMessage: string;
@@ -96,8 +96,44 @@ export interface CaseResponse {
   sharedWith: string[];
 }
 
-export const PostCase = async (payload: CreateCasePayload): Promise<CaseResponse> => {
-  const response = await ImageApi.post("/api/cases", payload);
+export interface CasePage {
+  content: CaseResponse[];
+  totalPages: number;
+  totalElements: number;
+  number: number; // 현재 페이지 (0-based)
+  size: number;
+}
+
+export const DeleteCase = async (caseId: string): Promise<void> => {
+  await ApiClient.delete(`/api/cases/${caseId}`);
+};
+
+export interface UpdateCasePayload {
+  title?: string;
+  description?: string;
+  occurredAt?: string;
+  assignedTo?: string;
+}
+
+export const UpdateCase = async (
+  caseId: string,
+  payload: UpdateCasePayload,
+): Promise<CaseResponse> => {
+  const response = await ApiClient.put(`/api/cases/${caseId}`, payload);
+  return response.data;
+};
+
+export const GetCases = async (page = 0, size = 10): Promise<CasePage> => {
+  const response = await ApiClient.get("/api/cases", {
+    params: { page, size },
+  });
+  return response.data;
+};
+
+export const PostCase = async (
+  payload: CreateCasePayload,
+): Promise<CaseResponse> => {
+  const response = await ApiClient.post("/api/cases", payload);
   return response.data;
 };
 
@@ -132,12 +168,15 @@ export interface FileUploadResult {
   processingQueued: boolean;
 }
 
-export const PostFiles = async (files: File[], metadataList: FileUploadMetadata[]): Promise<FileUploadResult[]> => {
+export const PostFiles = async (
+  files: File[],
+  metadataList: FileUploadMetadata[],
+): Promise<FileUploadResult[]> => {
   const formData = new FormData();
   files.forEach((file) => formData.append("files", file));
   formData.append("metadata", JSON.stringify(metadataList));
 
-  const response = await ImageApi.post("/api/files/upload", formData);
+  const response = await ApiClient.post("/api/files/upload", formData);
   return response.data;
 };
 
@@ -163,14 +202,19 @@ export const PostReplace = async (
   files.forEach((file) => formData.append("files", file));
   formData.append("metadata", JSON.stringify(metadata));
 
-  const response = await ImageApi.post("/api/files/replace", formData);
+  const response = await ApiClient.post("/api/files/replace", formData);
   return response.data;
 };
 
-export const PostMosaic = async (file: File, boxes: number[][]): Promise<Blob> => {
+export const PostMosaic = async (
+  file: File,
+  boxes: number[][],
+): Promise<Blob> => {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("boxes", JSON.stringify(boxes));
-  const response = await MosaicApi.post("/blur_boxes", formData, { responseType: "blob" });
+  const response = await MosaicApi.post("/blur_boxes", formData, {
+    responseType: "blob",
+  });
   return response.data as Blob;
 };
