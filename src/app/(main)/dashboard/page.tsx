@@ -94,7 +94,7 @@ export default function DashboardPage() {
         ]);
         setStats(statsData);
         setCases(casesData.content);
-        setSharedCount(sharedData.totalElements);
+        setSharedCount(sharedData.totalElements ?? 0);
       } catch {
         // 개별 실패는 빈 상태로 처리
       } finally {
@@ -105,7 +105,7 @@ export default function DashboardPage() {
   }, []);
 
   const openCount = cases.filter((c) => c.status === "OPEN" && c.accessType === "OWNED").length;
-  const reviewCount = cases.filter((c) => c.status === "UNDER_REVIEW" && c.accessType === "OWNED").length;
+  const closedCount = cases.filter((c) => c.status === "CLOSED" && c.accessType === "OWNED").length;
 
   const uploadDiff = stats
     ? stats.todayUploadCount - stats.yesterdayUploadCount
@@ -159,9 +159,9 @@ export default function DashboardPage() {
         />
         <StatCard
           icon={Folder}
-          label="검토중 사건"
-          value={reviewCount}
-          sub="검토 대기 중"
+          label="종료된 사건"
+          value={closedCount}
+          sub="사건 종료"
           trend="neutral"
           color="bg-[#1d2c4e]"
         />
@@ -258,8 +258,11 @@ export default function DashboardPage() {
         </div>
       </div>
 
+      {/* 최근 사건 + 새 사건 생성 */}
+      <div className="grid grid-cols-4 gap-[18px] items-start">
+
       {/* 최근 사건 목록 */}
-      <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[22px]">
+      <div className="col-span-3 bg-white border border-[#e6e8ef] rounded-[10px] p-[22px]">
         <div className="flex items-center justify-between mb-[16px]">
           <h2 className="text-[15px] font-bold text-[#1f2330]">최근 사건</h2>
           <button
@@ -320,6 +323,33 @@ export default function DashboardPage() {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* 새 사건 생성 블록 */}
+      <div className="col-span-1 bg-white border border-[#e6e8ef] rounded-[10px] p-[22px] flex flex-col gap-[16px]">
+        <div>
+          <h2 className="text-[15px] font-bold text-[#1f2330] mb-[6px]">새 사건 생성</h2>
+          <p className="text-[12.5px] text-[#9aa1b3] leading-[1.6]">
+            새로운 사건을 등록하고 관련 파일을 업로드하세요.
+          </p>
+        </div>
+
+        <div className="flex-1 flex items-center justify-center py-[18px]">
+          <div className="w-[64px] h-[64px] rounded-full bg-[#eef1f8] flex items-center justify-center">
+            <Folder size={28} className="text-[#1d2c4e]" />
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-[8px]">
+          <button
+            onClick={() => router.push("/cases/new")}
+            className="w-full py-[11px] bg-[#1d2c4e] text-white text-[13.5px] font-bold rounded-[8px] hover:bg-[#2b3f6c] transition-colors"
+          >
+            + 새 사건 생성
+          </button>
+        </div>
+      </div>
+
       </div>
     </div>
   );
