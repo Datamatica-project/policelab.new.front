@@ -73,6 +73,8 @@ export default function CasesPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [sortOrder, setSortOrder] = useState("latest");
 
+  const resetPage = () => setCurrentPage(0);
+
   useEffect(() => {
     const fetch = async () => {
       setIsLoading(true);
