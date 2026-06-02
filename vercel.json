@@ -1,0 +1,12 @@
+{
+    "rewrites": [
+        {
+            "source": "/proxy-api/:path*",
+            "destination": "http://1.235.57.64:8000/:path*"
+        },
+        {
+            "source": "/proxy-mosaic/:path*",
+            "destination": "http://1.235.57.64:8088/:path*"
+        }
+    ]
+}
