@@ -7,10 +7,6 @@
         {
             "source": "/proxy-mosaic/:path*",
             "destination": "http://3.36.223.36/api/mosaic/:path*"
-        },
-        {
-            "source": "/(.*)",
-            "destination": "/index.html"
         }
     ]
 }
