@@ -64,6 +64,14 @@ ApiClient.interceptors.response.use(
   },
 );
 
+MosaicApi.interceptors.request.use((config) => {
+  const token = getAuthStore?.().token;
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
 export interface UserResponse {
   email: string;
   name: string;
