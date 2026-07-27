@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { PostJoin, type UserRole } from "@/lib/api";
+import { PostJoin, RANK_LABEL, RANK_ORDER, type UserRole, type Rank } from "@/lib/api";
 import { toast } from "sonner";
 
 function UserIcon(props: React.SVGProps<SVGSVGElement>) {
@@ -74,6 +74,9 @@ export default function SignupPage() {
 
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
+  const [organization, setOrganization] = useState("");
+  const [department, setDepartment] = useState("");
+  const [rank, setRank] = useState<Rank | "">("");
   const [pw, setPw] = useState("");
   const [pwConfirm, setPwConfirm] = useState("");
   const [role, setRole] = useState<UserRole>("USER");
@@ -86,7 +89,7 @@ export default function SignupPage() {
     e.preventDefault();
     setError("");
 
-    if (!email || !name || !pw || !pwConfirm) {
+    if (!email || !name || !organization || !department || !rank || !pw || !pwConfirm) {
       setError("모든 항목을 입력해주세요.");
       return;
     }
@@ -97,7 +100,7 @@ export default function SignupPage() {
 
     setIsLoading(true);
     try {
-      await PostJoin(email, name, pw, role);
+      await PostJoin({ email, name, password: pw, role, organization, department, rank });
       toast.success("회원가입이 완료됐습니다. 로그인해주세요.");
       router.replace("/login");
     } catch {
@@ -191,6 +194,63 @@ export default function SignupPage() {
               onFocus={(e) => (e.target.style.borderColor = "#1d2c4e")}
               onBlur={(e) => (e.target.style.borderColor = "#d9deea")}
             />
+          </div>
+
+          {/* 소속 / 부서 */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label style={labelStyle}>소속</label>
+              <div className="relative mb-4">
+                <input
+                  type="text"
+                  placeholder="예: 서울지방경찰청"
+                  value={organization}
+                  onChange={(e) => setOrganization(e.target.value)}
+                  style={{ ...inputStyle, padding: "13px 14px" }}
+                  onFocus={(e) => (e.target.style.borderColor = "#1d2c4e")}
+                  onBlur={(e) => (e.target.style.borderColor = "#d9deea")}
+                />
+              </div>
+            </div>
+            <div>
+              <label style={labelStyle}>부서</label>
+              <div className="relative mb-4">
+                <input
+                  type="text"
+                  placeholder="예: 수사과"
+                  value={department}
+                  onChange={(e) => setDepartment(e.target.value)}
+                  style={{ ...inputStyle, padding: "13px 14px" }}
+                  onFocus={(e) => (e.target.style.borderColor = "#1d2c4e")}
+                  onBlur={(e) => (e.target.style.borderColor = "#d9deea")}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 직급 */}
+          <label style={labelStyle}>직급</label>
+          <div className="grid grid-cols-4 gap-2 mb-4">
+            {RANK_ORDER.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setRank(r)}
+                style={{
+                  padding: "9px 0",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontWeight: rank === r ? 700 : 500,
+                  border: `1.5px solid ${rank === r ? "#1d2c4e" : "#d9deea"}`,
+                  background: rank === r ? "#1d2c4e" : "#fff",
+                  color: rank === r ? "#fff" : "#6b7388",
+                  cursor: "pointer",
+                  transition: "all 0.15s",
+                }}
+              >
+                {RANK_LABEL[r]}
+              </button>
+            ))}
           </div>
 
           {/* 비밀번호 */}

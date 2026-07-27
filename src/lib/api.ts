@@ -37,11 +37,17 @@ ApiClient.interceptors.response.use(
     };
     const originalRequest = axiosError.config;
 
+    // /auth/login, /auth/refresh 자체의 401 은 재발급 대상에서 제외해야
+    // refresh 무한 루프를 방지할 수 있다.
+    const isAuthEndpoint =
+      originalRequest?.url?.includes("/auth/login") ||
+      originalRequest?.url?.includes("/auth/refresh");
+
     if (
       axiosError.response?.status === 401 &&
       originalRequest &&
       !originalRequest._retry &&
-      !originalRequest.url?.includes("/auth/login")
+      !isAuthEndpoint
     ) {
       originalRequest._retry = true;
 
@@ -55,7 +61,12 @@ ApiClient.interceptors.response.use(
 
         return ApiClient(originalRequest as Parameters<typeof ApiClient>[0]);
       } catch {
+        // 재발급 실패 = 세션 만료. 인메모리 토큰을 비우고,
+        // (백엔드가 refreshToken 쿠키를 이미 제거하므로) 로그인 페이지로 이동한다.
         getAuthStore?.().logout();
+        if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+          window.location.href = "/login";
+        }
         return Promise.reject(error);
       }
     }
@@ -72,9 +83,42 @@ MosaicApi.interceptors.request.use((config) => {
   return config;
 });
 
+export type Rank =
+  | "SUNGYEONG"
+  | "GYEONGJANG"
+  | "GYEONGSA"
+  | "GYEONGWI"
+  | "GYEONGGAM"
+  | "GYEONGJEONG"
+  | "CHONGGYEONG";
+
+export const RANK_LABEL: Record<Rank, string> = {
+  SUNGYEONG: "순경",
+  GYEONGJANG: "경장",
+  GYEONGSA: "경사",
+  GYEONGWI: "경위",
+  GYEONGGAM: "경감",
+  GYEONGJEONG: "경정",
+  CHONGGYEONG: "총경",
+};
+
+// 낮은 계급 → 높은 계급 순서 (드롭다운 노출 순서)
+export const RANK_ORDER: Rank[] = [
+  "SUNGYEONG",
+  "GYEONGJANG",
+  "GYEONGSA",
+  "GYEONGWI",
+  "GYEONGGAM",
+  "GYEONGJEONG",
+  "CHONGGYEONG",
+];
+
 export interface UserResponse {
   email: string;
   name: string;
+  organization: string | null;
+  department: string | null;
+  rank: Rank | null;
   roles: string[];
   status: string;
 }
@@ -90,13 +134,18 @@ export const ShareCase = async (caseId: string, usernames: string[]): Promise<vo
 
 export type UserRole = "USER" | "INSPECTOR" | "WORKER" | "ADMIN";
 
-export const PostJoin = async (
-  email: string,
-  name: string,
-  password: string,
-  role: UserRole,
-): Promise<void> => {
-  await ApiClient.post("/api/auth/join", { email, name, password, role });
+export interface JoinPayload {
+  email: string;
+  name: string;
+  password: string;
+  role: UserRole;
+  organization: string;
+  department: string;
+  rank: Rank;
+}
+
+export const PostJoin = async (payload: JoinPayload): Promise<void> => {
+  await ApiClient.post("/api/auth/join", payload);
 };
 
 export interface DashboardStats {
@@ -159,6 +208,18 @@ export interface CasePage {
 
 export const DeleteCase = async (caseId: string): Promise<void> => {
   await ApiClient.delete(`/api/cases/${caseId}`);
+};
+
+/**
+ * 사건 번호 중복 검사. true 이면 이미 사용 중인 번호.
+ */
+export const CheckCaseNumberExists = async (
+  caseNumber: string,
+): Promise<boolean> => {
+  const response = await ApiClient.get("/api/cases/exists", {
+    params: { caseNumber },
+  });
+  return Boolean(response.data?.exists);
 };
 
 export interface UpdateCasePayload {

@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { ApiClient, PostCase, PostFiles, PostReplace, GetUserList, type FileUploadResult, type Detection, type ReplaceFileResult, type UserResponse } from "@/lib/api";
+import { ApiClient, PostCase, PostFiles, PostReplace, GetUserList, CheckCaseNumberExists, type FileUploadResult, type Detection, type ReplaceFileResult, type UserResponse } from "@/lib/api";
 import {
   saveCaseSession,
   loadCaseSession,
@@ -674,6 +674,9 @@ export default function NewCasePage() {
 
   // Step 1
   const [caseNumber, setCaseNumber] = useState("");
+  // 사건 번호 중복 검사 상태
+  const [caseNumberStatus, setCaseNumberStatus] =
+    useState<"idle" | "checking" | "available" | "taken">("idle");
   const [caseName, setCaseName] = useState("");
   const [assignedTo, setAssignedTo] = useState("");       // email
   const [assignedToName, setAssignedToName] = useState(""); // 표시용 이름
@@ -822,6 +825,27 @@ export default function NewCasePage() {
 
   const formData: CaseFormData = { caseNumber, caseName, assignedTo, assignedToName, desc, files };
 
+  // 사건 번호 실시간 중복 검사 (디바운스 500ms).
+  // "checking" 표시는 onChange 에서 즉시 세팅하고, 여기서는 디바운스된
+  // 비동기 결과만 반영한다 (effect 본문에서 동기 setState 회피).
+  useEffect(() => {
+    const trimmed = caseNumber.trim();
+    if (!trimmed) return;
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const exists = await CheckCaseNumberExists(trimmed);
+        if (!cancelled) setCaseNumberStatus(exists ? "taken" : "available");
+      } catch {
+        if (!cancelled) setCaseNumberStatus("idle");
+      }
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [caseNumber]);
+
   const isStep2Ready =
     files.length > 0 &&
     files.every((f) => f.category && f.policy);
@@ -858,10 +882,28 @@ export default function NewCasePage() {
     e.target.value = "";
   };
 
-  const handleStep1Next = () => {
+  const handleStep1Next = async () => {
     if (!caseNumber.trim()) {
       toast.error("사건 번호를 입력해주세요.");
       return;
+    }
+    if (caseNumberStatus === "taken") {
+      toast.error("이미 사용 중인 사건 번호입니다.");
+      return;
+    }
+    // 최신 상태를 확실히 하기 위해 한 번 더 확인 (디바운스 미완료 대비)
+    if (caseNumberStatus === "checking" || caseNumberStatus === "idle") {
+      try {
+        const exists = await CheckCaseNumberExists(caseNumber.trim());
+        if (exists) {
+          setCaseNumberStatus("taken");
+          toast.error("이미 사용 중인 사건 번호입니다.");
+          return;
+        }
+        setCaseNumberStatus("available");
+      } catch {
+        // 검사 API 실패 시에는 진행을 막지 않음 (생성 시 서버가 재검증)
+      }
     }
     if (!caseName.trim()) {
       toast.error("사건명을 입력해주세요.");
@@ -1106,11 +1148,31 @@ export default function NewCasePage() {
                   사건 번호 <span className="text-[#d33b3b]">*</span>
                 </label>
                 <input
-                  className="w-full px-[14px] py-[11px] border border-[#d9deea] rounded-[8px] text-[13.5px] text-[#1f2330] outline-none focus:border-[#1d2c4e] placeholder:text-[#9aa1b3] transition-colors"
+                  className={cn(
+                    "w-full px-[14px] py-[11px] border rounded-[8px] text-[13.5px] text-[#1f2330] outline-none placeholder:text-[#9aa1b3] transition-colors",
+                    caseNumberStatus === "taken"
+                      ? "border-[#d33b3b] focus:border-[#d33b3b]"
+                      : caseNumberStatus === "available"
+                        ? "border-[#2ecc71] focus:border-[#2ecc71]"
+                        : "border-[#d9deea] focus:border-[#1d2c4e]",
+                  )}
                   value={caseNumber}
-                  onChange={(e) => setCaseNumber(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setCaseNumber(v);
+                    setCaseNumberStatus(v.trim() ? "checking" : "idle");
+                  }}
                   placeholder="2026-CASE-001"
                 />
+                {caseNumberStatus === "checking" && (
+                  <span className="text-[12px] text-[#9aa1b3]">중복 확인 중...</span>
+                )}
+                {caseNumberStatus === "available" && (
+                  <span className="text-[12px] text-[#1f8a4c]">사용 가능한 사건 번호입니다.</span>
+                )}
+                {caseNumberStatus === "taken" && (
+                  <span className="text-[12px] text-[#d33b3b]">이미 사용 중인 사건 번호입니다.</span>
+                )}
               </div>
               <div className="flex flex-col gap-[6px]">
                 <label className="text-[13px] font-semibold text-[#3a4055]">

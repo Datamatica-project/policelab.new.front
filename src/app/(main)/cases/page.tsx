@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Search, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Select,
@@ -16,7 +17,6 @@ import { useCaseStore } from "@/store/caseStore";
 
 const STATUS_MAP: Record<string, CaseStatus> = {
   OPEN: "진행중",
-  UNDER_REVIEW: "검토중",
   CLOSED: "사건종료",
 };
 
@@ -41,7 +41,6 @@ const SEARCH_FIELD_LABELS: Record<string, string> = {
 
 const STATUS_LABELS: Record<string, string> = {
   all: "전체",
-  검토중: "검토중",
   진행중: "진행중",
   사건종료: "사건종료",
 };
@@ -61,6 +60,7 @@ const ACCESS_TABS: { label: string; value: CaseAccessType }[] = [
 ];
 
 export default function CasesPage() {
+  const router = useRouter();
   const { setSidebarCases } = useCaseStore();
   const [cases, setCases] = useState<CaseData[]>([]);
   const [totalPages, setTotalPages] = useState(1);
@@ -130,12 +130,23 @@ export default function CasesPage() {
 
   return (
     <div className="pb-10">
-      <h1 className="text-[32px] font-extrabold text-[#1f2330] tracking-[-0.02em] mb-2">
-        사건관리
-      </h1>
-      <p className="text-[14.5px] text-[#6b7388] mb-[18px]">
-        사건 단위로 자료를 관리할 수 있습니다.
-      </p>
+      <div className="flex items-start justify-between gap-4 mb-[18px]">
+        <div>
+          <h1 className="text-[32px] font-extrabold text-[#1f2330] tracking-[-0.02em] mb-2">
+            사건관리
+          </h1>
+          <p className="text-[14.5px] text-[#6b7388]">
+            사건 단위로 자료를 관리할 수 있습니다.
+          </p>
+        </div>
+        <button
+          onClick={() => router.push("/cases/new")}
+          className="shrink-0 flex items-center gap-[7px] px-[18px] py-[11px] bg-[#1d2c4e] text-white rounded-[8px] text-[14px] font-bold hover:bg-[#2b3f6c] transition-colors"
+        >
+          <Plus size={16} />
+          새 사건
+        </button>
+      </div>
 
       {/* 접근 유형 탭 */}
       <div className="flex items-center gap-[6px] mb-[22px]">
@@ -200,7 +211,6 @@ export default function CasesPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">전체</SelectItem>
-            <SelectItem value="검토중">검토중</SelectItem>
             <SelectItem value="진행중">진행중</SelectItem>
             <SelectItem value="사건종료">사건종료</SelectItem>
           </SelectContent>

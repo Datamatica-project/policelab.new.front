@@ -26,9 +26,8 @@ const CATEGORY_COLOR: Record<string, string> = {
 const PIE_COLORS = ["#4f7cff", "#1d2c4e", "#9aa1b3", "#f5a623", "#e63946"];
 
 const STATUS_MAP: Record<string, { label: string; style: string }> = {
-  OPEN:         { label: "진행중", style: "bg-[#dceaf7] text-[#1f5a8f]" },
-  UNDER_REVIEW: { label: "검토중", style: "bg-[#e5e8f0] text-[#4a5168]" },
-  CLOSED:       { label: "사건종료", style: "bg-[#f9dcdc] text-[#a3282b]" },
+  OPEN:   { label: "진행중", style: "bg-[#dceaf7] text-[#1f5a8f]" },
+  CLOSED: { label: "사건종료", style: "bg-[#f9dcdc] text-[#a3282b]" },
 };
 
 function StatCard({

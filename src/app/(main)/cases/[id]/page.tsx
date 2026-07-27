@@ -18,12 +18,10 @@ const PER_PAGE = 12;
 
 const STATUS_MAP: Record<string, string> = {
   OPEN: "진행중",
-  UNDER_REVIEW: "검토중",
   CLOSED: "사건종료",
 };
 
 const STATUS_HEADER_STYLES: Record<string, string> = {
-  검토중: "bg-[#e5e8f0] text-[#4a5168]",
   진행중: "bg-[#dceaf7] text-[#1f5a8f]",
   사건종료: "bg-[#f9dcdc] text-[#a3282b]",
 };

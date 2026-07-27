@@ -1,4 +1,4 @@
-export type CaseStatus = "검토중" | "진행중" | "사건종료";
+export type CaseStatus = "진행중" | "사건종료";
 
 export interface CaseData {
   id: string;
@@ -30,7 +30,7 @@ const OFFICERS = [
   "홍길동 경감", "김민수 경위", "이영희 경사", "박지훈 경장",
   "최서연 순경", "정우성 경감", "강현우 경위", "윤소영 경사",
 ];
-const STATUSES: CaseStatus[] = ["검토중", "진행중", "사건종료"];
+const STATUSES: CaseStatus[] = ["진행중", "사건종료"];
 
 export function seededRand(seed: number) {
   let s = seed;
