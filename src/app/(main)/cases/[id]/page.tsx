@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import JSZip from "jszip";
-import { GetCaseDetail, ApiClient, type FileListResponse, type CaseDetailResponse } from "@/lib/api";
+import { GetCaseDetail, UpdateCaseStatus, ApiClient, type FileListResponse, type CaseDetailResponse } from "@/lib/api";
 
 const PER_PAGE = 12;
 
@@ -223,6 +223,7 @@ export default function CaseFilesPage() {
   const router = useRouter();
 
   const [caseDetail, setCaseDetail] = useState<CaseDetailResponse | null>(null);
+  const [statusUpdating, setStatusUpdating] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [previewFile, setPreviewFile] = useState<FileListResponse | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -272,6 +273,31 @@ export default function CaseFilesPage() {
   }, [page, totalPages]);
 
   const statusLabel = STATUS_MAP[caseDetail?.status ?? ""] ?? "진행중";
+
+  const handleStatusChange = async (label: string | null) => {
+    if (!label || !caseDetail) return;
+    const nextStatus = label === "사건종료" ? "CLOSED" : "OPEN";
+    if (nextStatus === caseDetail.status) return;
+    const prevStatus = caseDetail.status;
+    setStatusUpdating(true);
+    setCaseDetail({ ...caseDetail, status: nextStatus }); // 낙관적 갱신
+    try {
+      await UpdateCaseStatus(caseDetail.caseId, nextStatus);
+      toast.success(
+        nextStatus === "CLOSED" ? "사건을 종료했습니다." : "사건을 진행중으로 변경했습니다.",
+      );
+    } catch (err) {
+      setCaseDetail((c) => (c ? { ...c, status: prevStatus } : c)); // 롤백
+      const code = (err as { response?: { status?: number } })?.response?.status;
+      toast.error(
+        code === 403
+          ? "상태 변경 권한이 없습니다 (생성자·담당자만 가능)."
+          : "상태 변경에 실패했습니다.",
+      );
+    } finally {
+      setStatusUpdating(false);
+    }
+  };
 
   const truncate = (str: string, max: number) =>
     str.length > max ? str.slice(0, max) + "…" : str;
@@ -450,14 +476,20 @@ export default function CaseFilesPage() {
       {/* Case header */}
       {caseDetail && (
         <div className="flex items-center gap-3 mb-[22px] flex-wrap">
-          <span
-            className={cn(
-              "text-[12.5px] font-bold px-[14px] py-[7px] rounded-[6px]",
-              STATUS_HEADER_STYLES[statusLabel] ?? "bg-[#e5e8f0] text-[#4a5168]",
-            )}
-          >
-            {statusLabel}
-          </span>
+          <Select value={statusLabel} onValueChange={handleStatusChange} disabled={statusUpdating}>
+            <SelectTrigger
+              className={cn(
+                "h-auto w-fit gap-1 rounded-[6px] border-transparent px-[12px] py-[6px] text-[12.5px] font-bold shadow-none focus-visible:ring-0",
+                STATUS_HEADER_STYLES[statusLabel] ?? "bg-[#e5e8f0] text-[#4a5168]",
+              )}
+            >
+              <span>{statusLabel}</span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="진행중">진행중</SelectItem>
+              <SelectItem value="사건종료">사건종료</SelectItem>
+            </SelectContent>
+          </Select>
           <div className="text-[22px] font-bold text-[#1f2330] tracking-[-0.01em] flex items-center min-w-0">
             <span
               className="truncate max-w-[480px]"

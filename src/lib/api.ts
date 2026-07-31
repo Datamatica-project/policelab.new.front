@@ -211,6 +211,18 @@ export const DeleteCase = async (caseId: string): Promise<void> => {
 };
 
 /**
+ * 사건 상태 변경 (진행중 OPEN ↔ 사건종료 CLOSED).
+ * 생성자·담당자만 변경 가능하며, 권한이 없으면 403.
+ */
+export const UpdateCaseStatus = async (
+  caseId: string,
+  status: "OPEN" | "CLOSED",
+): Promise<CaseResponse> => {
+  const response = await ApiClient.patch(`/api/cases/${caseId}/status`, { status });
+  return response.data;
+};
+
+/**
  * 사건 번호 중복 검사. true 이면 이미 사용 중인 번호.
  */
 export const CheckCaseNumberExists = async (
