@@ -100,7 +100,11 @@ export default function LoginPage() {
         }
         // store에 엑세스 토큰과 이메일을 저장한다.
         login(res.data.accessToken, res.data.email);
-        router.replace("/dashboard");
+        // router.replace 는 클라이언트 라우터 캐시에 남아있는
+        // (토큰 만료 시 생성된) /dashboard → /login 리다이렉트를 재사용해
+        // 로그인 직후 다시 로그인 페이지로 튕기는 문제가 있다.
+        // 하드 내비게이션으로 미들웨어를 새로 태워 refreshToken 쿠키를 확실히 반영한다.
+        window.location.replace("/dashboard");
       } else {
         setError(res.resultMessage || "로그인에 실패했습니다.");
       }
