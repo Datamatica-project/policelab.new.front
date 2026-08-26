@@ -22,6 +22,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { ApiClient, PostCase, PostFiles, PostReplace, GetUserList, CheckCaseNumberExists, type FileUploadResult, type Detection, type ReplaceFileResult, type UserResponse } from "@/lib/api";
+import { uploadFilesDirect, type DirectUploadTask } from "@/lib/directUpload";
 import {
   saveCaseSession,
   loadCaseSession,
@@ -668,6 +669,7 @@ export default function NewCasePage() {
 
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [isCreating, setIsCreating] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<Record<number, number>>({});
   const [isCompressing, setIsCompressing] = useState(false);
   const [createdCaseId, setCreatedCaseId] = useState<string | number | null>(null);
   const [replaceResults, setReplaceResults] = useState<ReplaceFileResult[]>([]);
@@ -918,6 +920,7 @@ export default function NewCasePage() {
 
   const goToStep3 = async () => {
     setIsCreating(true);
+    setUploadProgress({});
     try {
       const caseRes = await PostCase({
         caseNumber,
@@ -930,18 +933,52 @@ export default function NewCasePage() {
       const caseId = caseRes.caseId;
       setCreatedCaseId(caseId);
 
-      const uploadResults = await PostFiles(
-        files.map((f) => f.file as File),
-        files.map((f) => ({
-          storageType: f.policy === "internal" ? "NAS" : "S3",
-          description: f.description,
-          categoryName: f.category,
-          tags: f.tags,
-          caseId,
-        })),
-      );
+      // S3 대상 파일은 Vercel 프록시를 거치지 않는 presigned 직접 업로드로,
+      // NAS 대상 파일은 (직접 업로드 방식이 없으므로) 기존 멀티파트 경로 그대로 보낸다.
+      const s3Files = files.filter((f) => f.policy !== "internal");
+      const nasFiles = files.filter((f) => f.policy === "internal");
 
-      const updatedFiles = files.map((f, i) => ({ ...f, uploadResult: uploadResults[i] }));
+      const directTasks: DirectUploadTask[] = s3Files.map((f) => ({
+        id: f.id,
+        file: f.file as File,
+        description: f.description,
+        categoryName: f.category,
+        tags: f.tags,
+      }));
+
+      const [directOutcomes, nasResults] = await Promise.all([
+        uploadFilesDirect(caseId, directTasks, (id, pct) =>
+          setUploadProgress((prev) => ({ ...prev, [id]: pct })),
+        ),
+        nasFiles.length > 0
+          ? PostFiles(
+              nasFiles.map((f) => f.file as File),
+              nasFiles.map((f) => ({
+                storageType: "NAS",
+                description: f.description,
+                categoryName: f.category,
+                tags: f.tags,
+                caseId,
+              })),
+            )
+          : Promise.resolve<FileUploadResult[]>([]),
+      ]);
+
+      const failed = directOutcomes.find((o) => o.error);
+      if (failed) {
+        throw failed.error;
+      }
+
+      const resultById = new Map<number, FileUploadResult>();
+      directOutcomes.forEach((o) => {
+        if (o.result) resultById.set(o.id, o.result);
+      });
+      nasFiles.forEach((f, i) => {
+        const result = nasResults[i];
+        if (result) resultById.set(f.id, result);
+      });
+
+      const updatedFiles = files.map((f) => ({ ...f, uploadResult: resultById.get(f.id) }));
       setFiles(updatedFiles);
       setSelectedFileId(files[0]?.id ?? null);
 
@@ -1493,7 +1530,10 @@ export default function NewCasePage() {
                           </div>
                           <div className="flex-1 min-w-0">
                             <p className="text-[13.5px] font-bold text-[#1d2c4e] truncate">{f.name}</p>
-                            <p className="text-[12px] text-[#6b7388] mt-0.5">{f.sizeMB}MB</p>
+                            <p className="text-[12px] text-[#6b7388] mt-0.5">
+                              {f.sizeMB}MB
+                              {isCreating && uploadProgress[f.id] != null && ` · 업로드 ${uploadProgress[f.id]}%`}
+                            </p>
                           </div>
                           {isFilled && (
                             <span className="shrink-0 text-[11.5px] bg-[#e3f4ea] text-[#1f7a47] font-bold px-2 py-[3px] rounded-[5px]">

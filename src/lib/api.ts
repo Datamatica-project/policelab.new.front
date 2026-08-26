@@ -346,6 +346,62 @@ export const PostFiles = async (
   return response.data;
 };
 
+export interface DirectUploadFileMeta {
+  fileName: string;
+  contentType: string;
+  fileSize: number;
+  description: string;
+  categoryName: string;
+  tags: string[];
+}
+
+export interface DirectUploadInitResult {
+  fileId: string;
+  uploadUrl: string;
+  expiresAt: string;
+}
+
+/**
+ * 파일별로 S3 presigned PUT URL을 예약한다. 실제 파일 바이트는 이 호출에
+ * 실리지 않는다 — 응답으로 받은 uploadUrl에 브라우저가 직접 PUT한다.
+ */
+export const InitDirectUpload = async (
+  caseId: string,
+  files: DirectUploadFileMeta[],
+): Promise<DirectUploadInitResult[]> => {
+  const response = await ApiClient.post("/api/files/upload/init", { caseId, files });
+  return response.data;
+};
+
+/** S3 PUT이 끝난 뒤 호출해 비식별화·저장을 마무리한다. */
+export const CompleteDirectUpload = async (fileId: string): Promise<FileUploadResult> => {
+  const response = await ApiClient.post(`/api/files/upload/${fileId}/complete`);
+  return response.data;
+};
+
+/**
+ * presigned URL로 파일을 직접 S3에 PUT한다.
+ *
+ * 반드시 bare axios를 써야 한다 — ApiClient는 백엔드용 Authorization 헤더와
+ * baseURL을 주입하는데, 둘 다 S3로 가는 요청에는 있으면 안 된다(서명 불일치로
+ * 거부됨). Content-Type도 /upload/init에 보낸 값과 동일해야 한다 — presigned
+ * URL의 서명 자체가 그 값을 포함하고 있어 다르면 SignatureDoesNotMatch로 실패한다.
+ */
+export const PutFileToS3 = async (
+  uploadUrl: string,
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<void> => {
+  await axios.put(uploadUrl, file, {
+    headers: { "Content-Type": file.type },
+    onUploadProgress: (event) => {
+      if (onProgress && event.total) {
+        onProgress(Math.round((event.loaded / event.total) * 100));
+      }
+    },
+  });
+};
+
 export interface ReplaceFileMetadata {
   fileId: string;
   boxes?: number[][];
