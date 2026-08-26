@@ -428,6 +428,50 @@ export const PostReplace = async (
   return response.data;
 };
 
+export interface DirectReplaceFileMeta {
+  fileId: string;
+  fileName: string;
+  contentType: string;
+  fileSize: number;
+}
+
+export interface DirectReplaceInitResult {
+  fileId: string;
+  uploadUrl: string;
+  rawKey: string;
+  expiresAt: string;
+}
+
+/**
+ * 교체 대상 파일마다 S3 presigned PUT URL을 예약한다. /upload/init과 달리 이
+ * 시점엔 DB에 아무것도 쓰이지 않는다 — 대상 파일은 complete가 끝날 때까지
+ * 계속 정상 상태로 남는다.
+ */
+export const InitDirectReplace = async (
+  files: DirectReplaceFileMeta[],
+): Promise<DirectReplaceInitResult[]> => {
+  const response = await ApiClient.post("/api/files/replace/init", { files });
+  return response.data;
+};
+
+/**
+ * S3 PUT이 끝난 뒤 호출해 WebP 압축·저장을 마무리한다. rawKey는 init 응답에서
+ * 받은 값을 그대로 되돌려줘야 한다 — 서버가 두 호출 사이에 아무 상태도 기억하지 않는다.
+ */
+export const CompleteDirectReplace = async (
+  fileId: string,
+  rawKey: string,
+  fileName: string,
+  contentType: string,
+): Promise<ReplaceFileResult> => {
+  const response = await ApiClient.post(`/api/files/replace/${fileId}/complete`, {
+    rawKey,
+    fileName,
+    contentType,
+  });
+  return response.data;
+};
+
 export const PostMosaic = async (
   file: File,
   boxes: number[][],

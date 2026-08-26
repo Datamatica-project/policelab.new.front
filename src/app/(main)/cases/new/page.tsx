@@ -23,6 +23,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { ApiClient, PostCase, PostFiles, PostReplace, GetUserList, CheckCaseNumberExists, type FileUploadResult, type Detection, type ReplaceFileResult, type UserResponse } from "@/lib/api";
 import { uploadFilesDirect, type DirectUploadTask } from "@/lib/directUpload";
+import { replaceFilesDirect, type DirectReplaceTask } from "@/lib/directReplace";
 import {
   saveCaseSession,
   loadCaseSession,
@@ -1018,12 +1019,49 @@ export default function NewCasePage() {
         }),
       );
 
-      const metadata = files.map((f) => ({
-        fileId: f.uploadResult?.fileId ?? "",
-      }));
+      // S3 대상 파일은 presigned 직접 재업로드로, NAS 대상 파일은 기존 멀티파트 경로 그대로.
+      const s3Indices: number[] = [];
+      const nasIndices: number[] = [];
+      files.forEach((f, i) => {
+        (f.policy === "internal" ? nasIndices : s3Indices).push(i);
+      });
 
-      const results = await PostReplace(fetchedFiles, metadata);
-      setReplaceResults(results);
+      const directTasks: DirectReplaceTask[] = s3Indices.map((i) => ({
+        id: files[i].id,
+        fileId: files[i].uploadResult?.fileId ?? "",
+        file: fetchedFiles[i],
+      }));
+      const nasFiles = nasIndices.map((i) => fetchedFiles[i]);
+      const nasMetadata = nasIndices.map((i) => ({ fileId: files[i].uploadResult?.fileId ?? "" }));
+
+      const [directOutcomes, nasResults] = await Promise.all([
+        replaceFilesDirect(directTasks),
+        nasFiles.length > 0
+          ? PostReplace(nasFiles, nasMetadata)
+          : Promise.resolve<ReplaceFileResult[]>([]),
+      ]);
+
+      const failed = directOutcomes.find((o) => o.error);
+      if (failed) {
+        throw failed.error;
+      }
+
+      // Step3Complete가 replaceResults[i]를 files[i]와 위치로 대응시키므로, id로
+      // 상관관계를 맺은 뒤 반드시 files 원래 순서대로 다시 나열해야 한다.
+      const resultById = new Map<number, ReplaceFileResult>();
+      directOutcomes.forEach((o) => {
+        if (o.result) resultById.set(o.id, o.result);
+      });
+      nasIndices.forEach((i, j) => {
+        const result = nasResults[j];
+        if (result) resultById.set(files[i].id, result);
+      });
+
+      const orderedResults = files
+        .map((f) => resultById.get(f.id))
+        .filter((r): r is ReplaceFileResult => Boolean(r));
+
+      setReplaceResults(orderedResults);
       setStep(4);
     } catch {
       toast.error("파일 저장에 실패했습니다. 다시 시도해주세요.");
