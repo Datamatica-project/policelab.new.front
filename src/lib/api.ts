@@ -83,6 +83,30 @@ MosaicApi.interceptors.request.use((config) => {
   return config;
 });
 
+const FILE_API_MARKER = "/api/files/";
+
+/**
+ * 백엔드가 내려준 파일 URL 을 ApiClient 기준의 상대 경로로 바꾼다.
+ *
+ * NAS 저장 파일의 `url`/`thumbnail`/`downloadUrl` 은 백엔드가
+ * `SERVER_DOWNLOAD_URL + /api/files/{id}` 형태의 절대 URL 로 만들어 준다.
+ * 이 절대 URL 을 그대로 쓰면 두 가지가 깨진다.
+ *  - 배포 환경에서 SERVER_DOWNLOAD_URL 이 http 면 https 페이지에서 mixed content 로 차단된다.
+ *  - baseURL 을 우회하므로 프록시/오리진 설정이 반영되지 않는다.
+ * 그래서 `/api/files/` 이후만 잘라내 ApiClient 로 다시 태운다.
+ *
+ * S3 presigned URL 은 이 경로 조각을 포함하지 않으므로 null 이 되고,
+ * 호출부에서 원본 URL 을 그대로 쓰면 된다 (서명이 쿼리스트링에 있어 인증이 불필요).
+ *
+ * @param url 백엔드가 내려준 URL (절대/상대 모두 허용)
+ * @returns 파일 API 를 가리키면 상대 경로, 아니면 null
+ */
+export function toFileApiPath(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const idx = url.indexOf(FILE_API_MARKER);
+  return idx === -1 ? null : url.slice(idx);
+}
+
 export type Rank =
   | "SUNGYEONG"
   | "GYEONGJANG"

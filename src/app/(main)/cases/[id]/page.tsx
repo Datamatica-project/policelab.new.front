@@ -12,7 +12,8 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import JSZip from "jszip";
-import { GetCaseDetail, UpdateCaseStatus, ApiClient, type FileListResponse, type CaseDetailResponse } from "@/lib/api";
+import { GetCaseDetail, UpdateCaseStatus, ApiClient, toFileApiPath, type FileListResponse, type CaseDetailResponse } from "@/lib/api";
+import { useAuthedImage } from "@/hooks/useAuthedImage";
 
 const PER_PAGE = 12;
 
@@ -26,11 +27,27 @@ const STATUS_HEADER_STYLES: Record<string, string> = {
   사건종료: "bg-[#f9dcdc] text-[#a3282b]",
 };
 
+/**
+ * 파일 본문을 인증이 실린 요청으로 받아 브라우저 다운로드를 띄운다.
+ *
+ * <a href> 로 직접 걸면 Authorization 헤더가 실리지 않아 NAS 저장 파일은 401 이 된다.
+ */
+async function downloadFile(file: FileListResponse) {
+  const path = toFileApiPath(file.downloadUrl || file.url) ?? file.downloadUrl ?? file.url;
+  const response = await ApiClient.get(path, { responseType: "blob" });
+  const blobUrl = URL.createObjectURL(response.data as Blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = file.name;
+  a.click();
+  URL.revokeObjectURL(blobUrl);
+}
+
 /* ── PreviewModal ── */
 function PreviewModal({ file, onClose }: { file: FileListResponse; onClose: () => void }) {
   const isImage = file.type?.startsWith("image");
   const isVideo = file.type?.startsWith("video");
-  const previewUrl = file.url;
+  const { src: previewUrl } = useAuthedImage(file.url);
 
   return (
     <div
@@ -85,13 +102,12 @@ function PreviewModal({ file, onClose }: { file: FileListResponse; onClose: () =
             >
               <FileText size={48} strokeWidth={1.2} />
               <span className="text-[14px] font-medium">{file.name}</span>
-              <a
-                href={file.downloadUrl || file.url}
-                download={file.name}
+              <button
+                onClick={() => { downloadFile(file).catch(() => toast.error("다운로드에 실패했습니다.")); }}
                 className="mt-1 px-4 py-2 bg-[#1d2c4e] text-white text-[13px] font-semibold rounded-[6px] hover:bg-[#2b3f6c] transition-colors"
               >
                 다운로드
-              </a>
+              </button>
             </div>
           )}
         </div>
@@ -115,21 +131,13 @@ function FileCard({
   const [imgError, setImgError] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const isImage = file.type?.startsWith("image");
-  const previewUrl = file.thumbnail || file.url;
+  const { src: previewUrl, isError: previewError } = useAuthedImage(file.thumbnail || file.url);
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation();
     setIsDownloading(true);
     try {
-      const response = await ApiClient.get(file.downloadUrl || file.url, {
-        responseType: "blob",
-      });
-      const blobUrl = URL.createObjectURL(response.data as Blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = file.name;
-      a.click();
-      URL.revokeObjectURL(blobUrl);
+      await downloadFile(file);
     } catch {
       toast.error("다운로드에 실패했습니다.");
     } finally {
@@ -149,7 +157,7 @@ function FileCard({
     >
       {/* 썸네일 영역 */}
       <div className="w-full aspect-[4/3] bg-[#f0f2f5] relative overflow-hidden flex items-center justify-center">
-        {isImage && previewUrl && !imgError ? (
+        {isImage && previewUrl && !imgError && !previewError ? (
           <img
             src={previewUrl}
             alt={file.name}
@@ -329,7 +337,8 @@ export default function CaseFilesPage() {
       const zip = new JSZip();
       const results = await Promise.allSettled(
         targets.map(async (f) => {
-          const res = await ApiClient.get(f.downloadUrl || f.url, { responseType: "blob" });
+          const path = toFileApiPath(f.downloadUrl || f.url) ?? f.downloadUrl ?? f.url;
+          const res = await ApiClient.get(path, { responseType: "blob" });
           zip.file(f.name, res.data as Blob);
         }),
       );

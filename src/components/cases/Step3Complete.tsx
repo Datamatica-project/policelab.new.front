@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import CompareScene from "./CompareScene";
+import AuthedImage from "@/components/common/AuthedImage";
 import type { BBox } from "./ManualEditModal";
 import type { FileUploadResult, ReplaceFileResult } from "@/lib/api";
 import { ApiClient } from "@/lib/api";
@@ -87,26 +88,25 @@ function PreviewModal({
           </button>
         </div>
         <div className="p-5 bg-[#f5f6fa]">
-          {file.storageUrl ? (
-            <img
-              src={file.storageUrl}
-              alt={file.displayName}
-              className="block rounded-[8px] shadow-[0_4px_16px_rgba(15,22,40,0.10)]"
-              style={{
-                maxWidth: "min(760px, calc(100vw - 120px))",
-                maxHeight: "calc(100vh - 220px)",
-                width: "100%",
-                height: "auto",
-              }}
-            />
-          ) : (
-            <div
-              className="rounded-[8px] overflow-hidden"
-              style={{ width: "min(760px, calc(100vw - 120px))", aspectRatio: "4/3" }}
-            >
-              <CompareScene mosaic variant={file.seed} />
-            </div>
-          )}
+          <AuthedImage
+            src={file.storageUrl}
+            alt={file.displayName}
+            className="block rounded-[8px] shadow-[0_4px_16px_rgba(15,22,40,0.10)]"
+            style={{
+              maxWidth: "min(760px, calc(100vw - 120px))",
+              maxHeight: "calc(100vh - 220px)",
+              width: "100%",
+              height: "auto",
+            }}
+            fallback={
+              <div
+                className="rounded-[8px] overflow-hidden"
+                style={{ width: "min(760px, calc(100vw - 120px))", aspectRatio: "4/3" }}
+              >
+                <CompareScene mosaic variant={file.seed} />
+              </div>
+            }
+          />
         </div>
       </div>
     </div>
@@ -286,16 +286,13 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
                 style={{ flex: "0 0 calc((100% - 24px) / 3)", minWidth: 0 }}
               >
                 <div className="w-full aspect-[4/3] bg-[#f0f1f5] rounded-[6px] overflow-hidden mb-2 relative">
-                  {f.storageUrl ? (
-                    <img
-                      src={f.storageUrl}
-                      alt={f.displayName}
-                      className="absolute inset-0 w-full h-full"
-                      style={{ objectFit: "cover" }}
-                    />
-                  ) : (
-                    <CompareScene mosaic variant={f.seed} />
-                  )}
+                  <AuthedImage
+                    src={f.storageUrl}
+                    alt={f.displayName}
+                    className="absolute inset-0 w-full h-full"
+                    style={{ objectFit: "cover" }}
+                    fallback={<CompareScene mosaic variant={f.seed} />}
+                  />
                 </div>
                 <p className="text-[13px] font-semibold text-[#1f2330] truncate mb-1">
                   {f.displayName}
@@ -438,16 +435,13 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
               <tr key={f.id}>
                 <td className="py-4 border-b border-[#f0f1f5] text-[13.5px] text-[#3a4055]">
                   <span className="inline-block w-[52px] h-[38px] rounded bg-[#f0f1f5] overflow-hidden align-middle mr-[14px] relative">
-                    {f.storageUrl ? (
-                      <img
-                        src={f.storageUrl}
-                        alt={f.displayName}
-                        className="absolute inset-0 w-full h-full"
-                        style={{ objectFit: "cover" }}
-                      />
-                    ) : (
-                      <CompareScene mosaic variant={f.seed} />
-                    )}
+                    <AuthedImage
+                      src={f.storageUrl}
+                      alt={f.displayName}
+                      className="absolute inset-0 w-full h-full"
+                      style={{ objectFit: "cover" }}
+                      fallback={<CompareScene mosaic variant={f.seed} />}
+                    />
                   </span>
                   <span className="font-semibold text-[#1f2330] align-middle">{f.displayName}</span>
                 </td>

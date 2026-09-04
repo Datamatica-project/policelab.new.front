@@ -21,7 +21,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { ApiClient, PostCase, PostFiles, PostReplace, GetUserList, CheckCaseNumberExists, type FileUploadResult, type Detection, type ReplaceFileResult, type UserResponse } from "@/lib/api";
+import { ApiClient, PostCase, PostFiles, PostReplace, GetUserList, CheckCaseNumberExists, toFileApiPath, type FileUploadResult, type Detection, type ReplaceFileResult, type UserResponse } from "@/lib/api";
+import AuthedImage from "@/components/common/AuthedImage";
 import { uploadFilesDirect, type DirectUploadTask } from "@/lib/directUpload";
 import { replaceFilesDirect, type DirectReplaceTask } from "@/lib/directReplace";
 import {
@@ -419,26 +420,54 @@ function Step3Main({
     return () => URL.revokeObjectURL(url);
   }, [file?.id, file?.file]);
 
-  // 수동 모자이크 IDB 우선, 없으면 storageUrl
+  // 수동 모자이크 IDB 우선, 없으면 서버에 저장된 결과물
   useEffect(() => {
     const fileId = uploadResult?.fileId;
-    const fallback = uploadResult?.storageUrl ?? null;
+    const storageUrl = uploadResult?.storageUrl ?? null;
     if (!fileId || !caseId) {
-      setMosaicDisplayUrl(fallback);
+      setMosaicDisplayUrl(storageUrl);
       setMosaicSettled(true);
       return;
     }
     let objUrl: string | null = null;
-    loadMosaicFile(caseId, fileId).then((blob) => {
-      if (blob) {
-        objUrl = URL.createObjectURL(blob);
-        setMosaicDisplayUrl(objUrl);
-      } else {
-        setMosaicDisplayUrl(fallback);
-      }
-      setMosaicSettled(true);
-    });
-    return () => { if (objUrl) URL.revokeObjectURL(objUrl); };
+    let cancelled = false;
+
+    // 서버 저장본은 NAS 저장 파일일 경우 인증이 필요한 API URL 로 내려온다.
+    // <img src> 요청에는 토큰이 실리지 않으므로 blob 으로 받아 object URL 로 바꾼다.
+    // (S3 presigned URL 이면 toFileApiPath 가 null 이라 그대로 사용한다.)
+    const resolveStored = async (): Promise<string | null> => {
+      const apiPath = toFileApiPath(storageUrl);
+      if (!apiPath) return storageUrl;
+      const res = await ApiClient.get(apiPath, {
+        responseType: "blob",
+        params: { disposition: "inline" },
+      });
+      objUrl = URL.createObjectURL(res.data as Blob);
+      return objUrl;
+    };
+
+    loadMosaicFile(caseId, fileId)
+      .then(async (blob) => {
+        if (cancelled) return;
+        if (blob) {
+          objUrl = URL.createObjectURL(blob);
+          setMosaicDisplayUrl(objUrl);
+          return;
+        }
+        const resolved = await resolveStored();
+        if (cancelled) {
+          if (objUrl) URL.revokeObjectURL(objUrl);
+          return;
+        }
+        setMosaicDisplayUrl(resolved);
+      })
+      .catch(() => { if (!cancelled) setMosaicDisplayUrl(null); })
+      .finally(() => { if (!cancelled) setMosaicSettled(true); });
+
+    return () => {
+      cancelled = true;
+      if (objUrl) URL.revokeObjectURL(objUrl);
+    };
   // fileBoxes를 dep에 포함 → 수동 모자이크 적용 후 reviewedBoxes 변경 시 재조회
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file?.id, caseId, fileBoxes]);
@@ -637,11 +666,12 @@ function Step3Side({
                 </span>
                 {/* 썸네일 */}
                 <span className="shrink-0 w-[42px] h-[32px] rounded-[4px] bg-[#f0f1f5] overflow-hidden">
-                  {f.uploadResult?.storageUrl ? (
-                    <img src={f.uploadResult.storageUrl} alt={f.name} className="w-full h-full object-cover" />
-                  ) : (
-                    <CompareScene mosaic variant={f.seed} />
-                  )}
+                  <AuthedImage
+                    src={f.uploadResult?.storageUrl}
+                    alt={f.name}
+                    className="w-full h-full object-cover"
+                    fallback={<CompareScene mosaic variant={f.seed} />}
+                  />
                 </span>
                 {/* 파일 정보 */}
                 <div className="flex-1 min-w-0">
