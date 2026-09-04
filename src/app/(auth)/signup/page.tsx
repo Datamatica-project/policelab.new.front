@@ -103,8 +103,11 @@ export default function SignupPage() {
       await PostJoin({ email, name, password: pw, role, organization, department, rank });
       toast.success("회원가입이 완료됐습니다. 로그인해주세요.");
       router.replace("/login");
-    } catch {
-      setError("회원가입에 실패했습니다. 입력 정보를 확인해주세요.");
+    } catch (err) {
+      // 서버가 내려준 안내 메시지(예: 회원가입 미승인)를 그대로 보여준다.
+      const serverMessage = (err as { response?: { data?: { message?: string } } })
+        ?.response?.data?.message;
+      setError(serverMessage || "회원가입에 실패했습니다. 입력 정보를 확인해주세요.");
     } finally {
       setIsLoading(false);
     }
