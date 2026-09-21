@@ -15,13 +15,18 @@ import {
   X,
   Image,
   Loader2,
+  Film,
 } from "lucide-react";
 import { toast } from "sonner";
 import CompareScene from "./CompareScene";
 import AuthedImage from "@/components/common/AuthedImage";
+import FileProcessingBadge from "./FileProcessingBadge";
 import type { BBox } from "./ManualEditModal";
 import type { FileUploadResult, ReplaceFileResult } from "@/lib/api";
 import { ApiClient } from "@/lib/api";
+import { useFileProcessingPoll } from "@/hooks/useFileProcessingPoll";
+import { useAuthedImage } from "@/hooks/useAuthedImage";
+import { describeFileStatus, isFileViewable } from "@/lib/fileStatus";
 
 interface UploadedFile {
   id: number;
@@ -33,11 +38,16 @@ interface UploadedFile {
 
 interface CompressedFile extends UploadedFile {
   displayName: string;
-  storageUrl: string | undefined;
+  storageUrl: string | null | undefined;
   original: number;
   after: number;
   saved: number;
   rate: number;
+  /** 백엔드 FileProcessingStatus (폴링으로 갱신됨) */
+  processingStatus: string | null | undefined;
+  processingProgress: number | null | undefined;
+  /** 미리보기·다운로드가 가능한 상태인지 */
+  viewable: boolean;
 }
 
 interface Props {
@@ -55,6 +65,20 @@ const TODAY_DISPLAY = new Date().toLocaleDateString("ko-KR", {
   day: "numeric",
 });
 
+/** 영상 파일인지. 이미지용 자리 채움(CompareScene)을 영상에 그리면 없는 결과를 보여 주게 된다. */
+function isVideoFile(file: CompressedFile): boolean {
+  return file.uploadResult?.contentType?.startsWith("video") ?? false;
+}
+
+/** 영상 썸네일 자리. 백엔드가 영상 썸네일을 만들지 않으므로 아이콘으로 대체한다. */
+function VideoThumb() {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-[#eef0f5] text-[#8a93a8]">
+      <Film size={26} strokeWidth={1.5} />
+    </div>
+  );
+}
+
 /* ── Preview Modal ── */
 function PreviewModal({
   file,
@@ -63,6 +87,10 @@ function PreviewModal({
   file: CompressedFile;
   onClose: () => void;
 }) {
+  const isVideo = isVideoFile(file);
+  // 영상은 <img> 로 그릴 수 없어 blob 을 직접 받아 <video> 에 넣는다.
+  const { src: videoUrl } = useAuthedImage(isVideo ? file.storageUrl : null);
+
   return (
     <div
       className="fixed inset-0 bg-[rgba(15,22,40,0.45)] flex items-center justify-center z-[200] p-10"
@@ -77,7 +105,7 @@ function PreviewModal({
           <div>
             <h3 className="text-[16px] font-bold text-[#1f2330] m-0">{file.displayName}</h3>
             <p className="text-[12.5px] text-[#6b7388] mt-[2px]">
-              {file.after.toFixed(2)} MB · 모자이크 처리 완료
+              {file.after.toFixed(2)} MB · {isVideo ? "비식별화 완료" : "모자이크 처리 완료"}
             </p>
           </div>
           <button
@@ -88,25 +116,47 @@ function PreviewModal({
           </button>
         </div>
         <div className="p-5 bg-[#f5f6fa]">
-          <AuthedImage
-            src={file.storageUrl}
-            alt={file.displayName}
-            className="block rounded-[8px] shadow-[0_4px_16px_rgba(15,22,40,0.10)]"
-            style={{
-              maxWidth: "min(760px, calc(100vw - 120px))",
-              maxHeight: "calc(100vh - 220px)",
-              width: "100%",
-              height: "auto",
-            }}
-            fallback={
+          {isVideo ? (
+            videoUrl ? (
+              <video
+                src={videoUrl}
+                controls
+                className="block rounded-[8px] shadow-[0_4px_16px_rgba(15,22,40,0.10)]"
+                style={{
+                  maxWidth: "min(760px, calc(100vw - 120px))",
+                  maxHeight: "calc(100vh - 220px)",
+                }}
+              />
+            ) : (
               <div
-                className="rounded-[8px] overflow-hidden"
-                style={{ width: "min(760px, calc(100vw - 120px))", aspectRatio: "4/3" }}
+                className="flex flex-col items-center justify-center gap-3 rounded-[8px] bg-white border border-[#e6e8ef] text-[#9aa1b3]"
+                style={{ width: "min(760px, calc(100vw - 120px))", aspectRatio: "16/9" }}
               >
-                <CompareScene mosaic variant={file.seed} />
+                <Loader2 size={28} className="animate-spin" />
+                <span className="text-[13px] font-medium">영상을 불러오는 중...</span>
               </div>
-            }
-          />
+            )
+          ) : (
+            <AuthedImage
+              src={file.storageUrl}
+              alt={file.displayName}
+              className="block rounded-[8px] shadow-[0_4px_16px_rgba(15,22,40,0.10)]"
+              style={{
+                maxWidth: "min(760px, calc(100vw - 120px))",
+                maxHeight: "calc(100vh - 220px)",
+                width: "100%",
+                height: "auto",
+              }}
+              fallback={
+                <div
+                  className="rounded-[8px] overflow-hidden"
+                  style={{ width: "min(760px, calc(100vw - 120px))", aspectRatio: "4/3" }}
+                >
+                  <CompareScene mosaic variant={file.seed} />
+                </div>
+              }
+            />
+          )}
         </div>
       </div>
     </div>
@@ -119,20 +169,56 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
   const [previewFile, setPreviewFile] = useState<CompressedFile | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
 
+  // 영상은 이 화면에 도착한 시점에도 비식별화가 끝나 있지 않다. 처리 중인 파일만
+  // 폴링해 상태·URL 을 갱신한다 (이미지는 폴링 대상이 되지 않는다).
+  const { statusById, pendingCount } = useFileProcessingPoll(
+    files
+      .filter((f) => f.uploadResult?.fileId)
+      .map((f) => ({
+        id: f.uploadResult!.fileId,
+        processingStatus: f.uploadResult?.processingStatus,
+      })),
+  );
+
+  // 교체 결과는 fileId 로 대응시킨다. 영상처럼 교체 단계를 거치지 않는 파일이 섞이면
+  // files 와 길이가 달라져, 위치로 짝지으면 다른 파일의 용량·URL 이 표시된다.
+  const replaceResultByFileId = useMemo(
+    () => new Map(replaceResults.map((r) => [r.fileId, r])),
+    [replaceResults],
+  );
+
   const compressed = useMemo<CompressedFile[]>(() =>
-    files.map((f, i) => {
-      const result = replaceResults[i];
+    files.map((f) => {
+      const result = f.uploadResult
+        ? replaceResultByFileId.get(f.uploadResult.fileId)
+        : undefined;
+      const snapshot = f.uploadResult ? statusById.get(f.uploadResult.fileId) : undefined;
       const displayName = f.uploadResult?.originalFileName ?? f.name;
-      const storageUrl = result?.storageUrl ?? f.uploadResult?.storageUrl;
+      // 영상은 업로드 응답의 storageUrl 이 null 이고, 비식별화가 끝난 뒤 폴링 응답으로만
+      // 결과물 URL 을 알 수 있다.
+      const storageUrl =
+        result?.storageUrl ?? snapshot?.url ?? f.uploadResult?.storageUrl;
+      const processingStatus = snapshot?.processingStatus ?? f.uploadResult?.processingStatus;
       const original = f.sizeMB;
       const after = result
         ? +(result.fileSize / (1024 * 1024)).toFixed(2)
         : original;
       const saved = +(original - after).toFixed(2);
       const rate = original > 0 ? +((Math.max(0, saved) / original) * 100).toFixed(1) : 0;
-      return { ...f, displayName, storageUrl, original, after, saved, rate };
+      return {
+        ...f,
+        displayName,
+        storageUrl,
+        original,
+        after,
+        saved,
+        rate,
+        processingStatus,
+        processingProgress: snapshot?.processingProgress,
+        viewable: isFileViewable(processingStatus),
+      };
     }),
-    [files, replaceResults],
+    [files, replaceResultByFileId, statusById],
   );
 
   const totalOriginal = compressed.reduce((s, f) => s + f.original, 0);
@@ -152,9 +238,13 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
 
       // 파일 fetch (백엔드 경유 → S3 CORS 우회)
       await Promise.all(
-        compressed.map(async (f, i) => {
-          const fileId = replaceResults[i]?.fileId ?? f.uploadResult?.fileId;
+        compressed.map(async (f) => {
+          // 교체 결과의 fileId 는 원본과 같으므로 업로드 결과의 ID 를 그대로 쓴다.
+          const fileId = f.uploadResult?.fileId;
           if (!fileId) return;
+          // 처리 중·격리 파일은 백엔드가 409 로 막는다. 넣어 봐야 실패하고,
+          // 조용히 빠지면 사용자는 ZIP 에 파일이 없는 이유를 알 수 없다.
+          if (!f.viewable) return;
           try {
             const res = await ApiClient.get(`/api/files/${fileId}`, { responseType: "arraybuffer" });
             const ct = (res.headers as Record<string, string>)["content-type"] || "image/jpeg";
@@ -184,9 +274,13 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
           savedSizeMB: +Math.max(0, totalSaved).toFixed(2),
           savedRate: `${totalRate.toFixed(1)}%`,
         },
-        files: compressed.map((f, i) => ({
+        files: compressed.map((f) => ({
           fileName: f.displayName,
-          fileId: replaceResults[i]?.fileId ?? f.uploadResult?.fileId ?? "",
+          fileId: f.uploadResult?.fileId ?? "",
+          // 내보낸 시점의 처리 상태. 영상이 아직 처리 중이면 ZIP 에 파일이 빠져 있으므로
+          // 기록을 남겨 둔다.
+          processingStatus: f.processingStatus ?? null,
+          includedInZip: f.viewable,
           originalSizeMB: f.original,
           compressedSizeMB: f.after,
           savedSizeMB: +Math.max(0, f.saved).toFixed(2),
@@ -223,7 +317,12 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
       a.click();
       URL.revokeObjectURL(url);
 
-      toast.success("다운로드가 완료되었습니다.");
+      const skipped = compressed.filter((f) => !f.viewable).length;
+      if (skipped > 0) {
+        toast.warning(`${skipped}개 파일은 처리가 끝나지 않아 ZIP 에서 제외했습니다.`);
+      } else {
+        toast.success("다운로드가 완료되었습니다.");
+      }
     } catch {
       toast.error("다운로드에 실패했습니다. 다시 시도해주세요.");
     } finally {
@@ -244,7 +343,9 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
               검수가 완료되었습니다.
             </h2>
             <p className="text-[13.5px] text-[#6b7388]">
-              모자이크 처리 및 압축이 완료되어 사건 파일이 안전하게 저장되었습니다.
+              {pendingCount > 0
+                ? `사건 파일이 저장되었습니다. 영상 ${pendingCount}개는 비식별화가 진행 중이며, 완료되면 이 화면에서 자동으로 갱신됩니다.`
+                : "모자이크 처리 및 압축이 완료되어 사건 파일이 안전하게 저장되었습니다."}
             </p>
           </div>
         </div>
@@ -287,11 +388,24 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
               >
                 <div className="w-full aspect-[4/3] bg-[#f0f1f5] rounded-[6px] overflow-hidden mb-2 relative">
                   <AuthedImage
-                    src={f.storageUrl}
+                    src={f.viewable && !isVideoFile(f) ? f.storageUrl : null}
                     alt={f.displayName}
                     className="absolute inset-0 w-full h-full"
                     style={{ objectFit: "cover" }}
-                    fallback={<CompareScene mosaic variant={f.seed} />}
+                    fallback={
+                      !f.viewable ? (
+                        <div className="absolute inset-0 flex items-center justify-center bg-[#f5f6fa]">
+                          <FileProcessingBadge
+                            status={f.processingStatus}
+                            progress={f.processingProgress}
+                          />
+                        </div>
+                      ) : isVideoFile(f) ? (
+                        <VideoThumb />
+                      ) : (
+                        <CompareScene mosaic variant={f.seed} />
+                      )
+                    }
                   />
                 </div>
                 <p className="text-[13px] font-semibold text-[#1f2330] truncate mb-1">
@@ -300,7 +414,9 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
                 <p className="text-[12px] text-[#8a93a8] mb-2">{f.after.toFixed(2)} MB</p>
                 <button
                   onClick={() => setPreviewFile(f)}
-                  className="self-end inline-flex items-center gap-1 px-3 py-[6px] border border-[#d9deea] rounded-[6px] bg-white text-[#3a4055] text-[12px] font-semibold hover:bg-[#f3f4f8] hover:border-[#c5cbd9] transition-colors"
+                  disabled={!f.viewable}
+                  title={f.viewable ? undefined : describeFileStatus(f.processingStatus)?.description}
+                  className="self-end inline-flex items-center gap-1 px-3 py-[6px] border border-[#d9deea] rounded-[6px] bg-white text-[#3a4055] text-[12px] font-semibold hover:bg-[#f3f4f8] hover:border-[#c5cbd9] transition-colors disabled:text-[#9aa1b3] disabled:bg-[#f7f8fb] disabled:cursor-not-allowed disabled:hover:border-[#d9deea]"
                 >
                   미리보기
                   <ExternalLink size={11} />
@@ -436,11 +552,17 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
                 <td className="py-4 border-b border-[#f0f1f5] text-[13.5px] text-[#3a4055]">
                   <span className="inline-block w-[52px] h-[38px] rounded bg-[#f0f1f5] overflow-hidden align-middle mr-[14px] relative">
                     <AuthedImage
-                      src={f.storageUrl}
+                      src={f.viewable && !isVideoFile(f) ? f.storageUrl : null}
                       alt={f.displayName}
                       className="absolute inset-0 w-full h-full"
                       style={{ objectFit: "cover" }}
-                      fallback={<CompareScene mosaic variant={f.seed} />}
+                      fallback={
+                        !f.viewable ? null : isVideoFile(f) ? (
+                          <VideoThumb />
+                        ) : (
+                          <CompareScene mosaic variant={f.seed} />
+                        )
+                      }
                     />
                   </span>
                   <span className="font-semibold text-[#1f2330] align-middle">{f.displayName}</span>
@@ -458,14 +580,23 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
                   {f.rate.toFixed(1)}%
                 </td>
                 <td className="py-4 border-b border-[#f0f1f5]">
-                  <span className="inline-block bg-[#e3f4ea] text-[#1f7a47] font-bold text-[12px] px-2 py-[3px] rounded-[5px]">
-                    저장 완료
-                  </span>
+                  {f.viewable ? (
+                    <span className="inline-block bg-[#e3f4ea] text-[#1f7a47] font-bold text-[12px] px-2 py-[3px] rounded-[5px]">
+                      저장 완료
+                    </span>
+                  ) : (
+                    <FileProcessingBadge
+                      status={f.processingStatus}
+                      progress={f.processingProgress}
+                    />
+                  )}
                 </td>
                 <td className="py-4 border-b border-[#f0f1f5] text-right">
                   <button
                     onClick={() => setPreviewFile(f)}
-                    className="inline-flex items-center gap-[6px] px-[14px] py-[7px] border border-[#d9deea] rounded-[6px] bg-white text-[#3a4055] text-[12.5px] font-semibold hover:bg-[#f3f4f8] transition-colors"
+                    disabled={!f.viewable}
+                    title={f.viewable ? undefined : describeFileStatus(f.processingStatus)?.description}
+                    className="inline-flex items-center gap-[6px] px-[14px] py-[7px] border border-[#d9deea] rounded-[6px] bg-white text-[#3a4055] text-[12.5px] font-semibold hover:bg-[#f3f4f8] transition-colors disabled:text-[#9aa1b3] disabled:bg-[#f7f8fb] disabled:cursor-not-allowed"
                   >
                     미리보기
                     <ExternalLink size={11} />

@@ -14,6 +14,9 @@ import { toast } from "sonner";
 import JSZip from "jszip";
 import { GetCaseDetail, UpdateCaseStatus, ApiClient, toFileApiPath, type FileListResponse, type CaseDetailResponse } from "@/lib/api";
 import { useAuthedImage } from "@/hooks/useAuthedImage";
+import { useFileProcessingPoll } from "@/hooks/useFileProcessingPoll";
+import FileProcessingBadge from "@/components/cases/FileProcessingBadge";
+import { describeFileStatus, isFileViewable } from "@/lib/fileStatus";
 
 const PER_PAGE = 12;
 
@@ -47,7 +50,10 @@ async function downloadFile(file: FileListResponse) {
 function PreviewModal({ file, onClose }: { file: FileListResponse; onClose: () => void }) {
   const isImage = file.type?.startsWith("image");
   const isVideo = file.type?.startsWith("video");
-  const { src: previewUrl } = useAuthedImage(file.url);
+  // 처리 중·격리된 파일은 백엔드가 409 로 막으므로 아예 요청하지 않는다.
+  const { src: previewUrl } = useAuthedImage(
+    isFileViewable(file.processingStatus) ? file.url : null,
+  );
 
   return (
     <div
@@ -130,11 +136,29 @@ function FileCard({
 }) {
   const [imgError, setImgError] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
-  const isImage = file.type?.startsWith("image");
-  const { src: previewUrl, isError: previewError } = useAuthedImage(file.thumbnail || file.url);
+
+  const status = describeFileStatus(file.processingStatus, file.processingProgress);
+  const viewable = isFileViewable(file.processingStatus);
+
+  // 타일에 쓸 수 있는 소스만 받아온다.
+  //
+  // 처리 중·격리된 파일은 백엔드가 409 로 막으므로 요청해 봐야 실패만 쌓인다.
+  // 영상은 thumbnail(= 워커가 만든 포스터)이 있을 때만 받는다 — 없는데 file.url 로
+  // 물러서면 목록을 열 때마다 타일 수만큼 '영상 전체'를 내려받아 버리게 된다
+  // (S3 presigned 는 통과라 무해하지만, NAS·봉투 암호화 파일은 /api/files/{id} 경로라
+  //  실제로 전부 다운로드된다).
+  const isVideo = file.type?.startsWith("video") ?? false;
+  const thumbSource = isVideo ? file.thumbnail : (file.thumbnail || file.url);
+  const { src: previewUrl, isError: previewError } = useAuthedImage(
+    viewable ? thumbSource : null,
+  );
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!viewable) {
+      toast.info(status?.description ?? "아직 다운로드할 수 없는 파일입니다.");
+      return;
+    }
     setIsDownloading(true);
     try {
       await downloadFile(file);
@@ -145,6 +169,15 @@ function FileCard({
     }
   };
 
+  // 미리보기를 열어도 빈 화면만 보이므로, 왜 볼 수 없는지 알려 주는 편이 낫다.
+  const handlePreview = () => {
+    if (!viewable) {
+      toast.info(status?.description ?? "아직 열람할 수 없는 파일입니다.");
+      return;
+    }
+    onPreview();
+  };
+
   return (
     <div
       className={cn(
@@ -153,11 +186,17 @@ function FileCard({
           ? "border-[1.5px] border-[#1d2c4e] shadow-[0_0_0_3px_rgba(29,44,78,0.08)]"
           : "border border-[#e6e8ef] hover:border-[#c5cbd9] hover:shadow-[0_6px_18px_rgba(15,22,40,0.06)] hover:-translate-y-0.5",
       )}
-      onClick={onPreview}
+      onClick={handlePreview}
     >
       {/* 썸네일 영역 */}
       <div className="w-full aspect-[4/3] bg-[#f0f2f5] relative overflow-hidden flex items-center justify-center">
-        {isImage && previewUrl && !imgError && !previewError ? (
+        {status && (
+          <div className="absolute top-[8px] right-[8px] z-10">
+            <FileProcessingBadge status={file.processingStatus} progress={file.processingProgress} />
+          </div>
+        )}
+
+        {previewUrl && !imgError && !previewError ? (
           <img
             src={previewUrl}
             alt={file.name}
@@ -202,21 +241,40 @@ function FileCard({
           <span>{file.size}</span>
           <span>{file.uploadDate}</span>
         </div>
+
+        {status?.progress != null && (
+          <div className="h-[3px] rounded-full bg-[#e8ecf4] overflow-hidden">
+            <div
+              className="h-full bg-[#2563EB] transition-[width] duration-500"
+              style={{ width: `${status.progress}%` }}
+            />
+          </div>
+        )}
       </div>
 
       <div className="flex gap-[14px] px-4 pb-[14px] pt-[10px] border-t border-[#f0f1f5]">
         <button
-          className="w-[22px] h-[22px] flex items-center justify-center text-[#8a93a8] rounded hover:text-[#1d2c4e] hover:bg-[#f3f4f8] transition-colors"
-          onClick={(e) => { e.stopPropagation(); onPreview(); }}
-          title="미리보기"
+          className={cn(
+            "w-[22px] h-[22px] flex items-center justify-center rounded transition-colors",
+            viewable
+              ? "text-[#8a93a8] hover:text-[#1d2c4e] hover:bg-[#f3f4f8]"
+              : "text-[#c5cbd9] cursor-not-allowed",
+          )}
+          onClick={(e) => { e.stopPropagation(); handlePreview(); }}
+          title={viewable ? "미리보기" : status?.description}
         >
           <Eye size={17} />
         </button>
         <button
-          className="w-[22px] h-[22px] flex items-center justify-center text-[#8a93a8] rounded hover:text-[#1d2c4e] hover:bg-[#f3f4f8] transition-colors disabled:opacity-40"
+          className={cn(
+            "w-[22px] h-[22px] flex items-center justify-center rounded transition-colors disabled:opacity-40",
+            viewable
+              ? "text-[#8a93a8] hover:text-[#1d2c4e] hover:bg-[#f3f4f8]"
+              : "text-[#c5cbd9] cursor-not-allowed",
+          )}
           onClick={handleDownload}
           disabled={isDownloading}
-          title="다운로드"
+          title={viewable ? "다운로드" : status?.description}
         >
           <Download size={17} />
         </button>
@@ -256,7 +314,31 @@ export default function CaseFilesPage() {
     load();
   }, [id]);
 
-  const allFiles = caseDetail?.files ?? [];
+  // 빈 배열을 매 렌더 새로 만들면 아래 useMemo 가 계속 재계산된다.
+  const rawFiles = useMemo(() => caseDetail?.files ?? [], [caseDetail]);
+
+  // 영상은 업로드가 끝나도 비식별화가 진행 중이다. 처리 중인 파일만 따로 폴링해
+  // 최신 상태를 덮어쓴다 (목록 전체를 다시 받지 않는 이유는 훅 주석 참고).
+  const { statusById, pendingCount } = useFileProcessingPoll(rawFiles);
+
+  const allFiles = useMemo(
+    () =>
+      rawFiles.map((file) => {
+        const snapshot = statusById.get(file.id);
+        if (!snapshot) return file;
+        return {
+          ...file,
+          processingStatus: snapshot.processingStatus ?? file.processingStatus,
+          processingProgress: snapshot.processingProgress ?? file.processingProgress,
+          // 완료된 영상은 결과물로 저장 경로가 바뀌므로 URL 도 함께 갱신해야
+          // 새로고침 없이 미리보기·다운로드가 열린다.
+          url: snapshot.url ?? file.url,
+          thumbnail: snapshot.thumbnail ?? file.thumbnail,
+          downloadUrl: snapshot.downloadUrl ?? file.downloadUrl,
+        };
+      }),
+    [rawFiles, statusById],
+  );
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim();
@@ -329,8 +411,19 @@ export default function CaseFilesPage() {
   };
 
   const handleBulkDownload = async () => {
-    const targets = allFiles.filter((f) => selectedIds.has(f.id));
-    if (targets.length === 0) return;
+    const selected = allFiles.filter((f) => selectedIds.has(f.id));
+    // 처리 중·격리된 파일은 백엔드가 409 로 막는다. 요청에 섞어 보내면 "일부 실패"로만
+    // 보고되어 이유를 알 수 없으므로, 미리 걸러내고 몇 개를 왜 뺐는지 알려 준다.
+    const targets = selected.filter((f) => isFileViewable(f.processingStatus));
+    const skipped = selected.length - targets.length;
+
+    if (targets.length === 0) {
+      if (skipped > 0) toast.info("선택한 파일이 아직 처리 중이거나 열람이 차단된 상태입니다.");
+      return;
+    }
+    if (skipped > 0) {
+      toast.info(`${skipped}개 파일은 처리가 끝나지 않아 제외했습니다.`);
+    }
 
     setIsBulkDownloading(true);
     try {
@@ -509,6 +602,17 @@ export default function CaseFilesPage() {
             <span className="text-[#c5cbd9] mx-2 font-normal shrink-0">&gt;</span>
             <span className="text-[#6b7388] font-medium text-[20px] shrink-0">파일</span>
           </div>
+        </div>
+      )}
+
+      {/* 처리 중 안내 — 카드가 왜 잠겨 있는지 설명한다 */}
+      {pendingCount > 0 && (
+        <div className="flex items-center gap-2 mb-[18px] px-[14px] py-[11px] rounded-[8px] bg-[#eaf1fe] border border-[#c7d9fb] text-[13px] text-[#1d4ed8]">
+          <Loader2 size={14} className="animate-spin shrink-0" />
+          <span>
+            {pendingCount}개 파일의 비식별화가 진행 중입니다. 완료되면 자동으로 갱신되며,
+            그때까지 미리보기·다운로드가 차단됩니다.
+          </span>
         </div>
       )}
 

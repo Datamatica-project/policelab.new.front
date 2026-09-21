@@ -298,7 +298,43 @@ export interface FileListResponse {
   downloadUrl: string;
   thumbnail: string;
   sharedWith: string[];
+
+  // 영상은 업로드 직후 비식별화가 끝나 있지 않다. 목록 화면이 상세를 따로 열지 않고도
+  // "처리 중" 배지를 띄우고 완료를 감지할 수 있도록 상태가 함께 내려온다.
+  // 값의 의미와 판정은 @/lib/fileStatus 참고.
+  processingStatus?: string | null;
+  /** 0~100. 영상 처리 중에만 값이 있다 */
+  processingProgress?: number | null;
+  width?: number | null;
+  height?: number | null;
+  /** 영상 길이(초). 이미지·문서는 null */
+  durationSec?: number | null;
 }
+
+/**
+ * 처리 상태 폴링에 쓰는 파일 상세 응답의 부분 타입.
+ *
+ * `GET /api/files/{id}/detail` 은 더 많은 필드를 내려주지만, 폴링은 상태가 바뀌었는지와
+ * 완료 후 갱신된 URL 만 필요하다 — 쓰지 않는 필드까지 타입에 박아 두면 백엔드 변경에
+ * 불필요하게 묶인다.
+ */
+export interface FileProcessingDetail {
+  id: string;
+  processingStatus?: string | null;
+  processingProgress?: number | null;
+  /** 처리 중에는 null 이다 — 비식별화 이전 원본의 URL 은 내주지 않는다 */
+  url?: string | null;
+  thumbnail?: string | null;
+  downloadUrl?: string | null;
+  durationSec?: number | null;
+}
+
+export const GetFileProcessingDetail = async (
+  fileId: string,
+): Promise<FileProcessingDetail> => {
+  const response = await ApiClient.get(`/api/files/${fileId}/detail`);
+  return response.data as FileProcessingDetail;
+};
 
 export interface CaseDetailResponse {
   caseId: string;
@@ -350,12 +386,19 @@ export interface FileUploadResult {
   contentType: string;
   storageType: string;
   storagePath: string;
-  storageUrl: string;
+  /** 영상은 업로드 응답 시점에 null 이다 — 비식별화 이전 원본의 URL 은 내려오지 않는다 */
+  storageUrl: string | null;
   tags: string[];
   uploadedAt: string | null;
   detectionCount: number;
   detections: Detection[];
+  /**
+   * 비동기 후처리 대기 여부. 영상은 항상 true 로, 이 경우 storageUrl·detectionCount 가
+   * 아직 확정되지 않았으니 processingStatus 가 끝날 때까지 폴링해야 한다.
+   */
   processingQueued: boolean;
+  /** 백엔드 FileProcessingStatus. 영상 업로드 직후에는 ANONYMIZING */
+  processingStatus?: string | null;
 }
 
 export const PostFiles = async (
@@ -507,4 +550,80 @@ export const PostMosaic = async (
     responseType: "blob",
   });
   return response.data as Blob;
+};
+
+// ── 영상 검출 기록 · 수동 보정 ────────────────────────────────────────────────
+//
+// 이미지는 업로드 응답 하나에 결과와 검출 좌표가 함께 실려 오지만, 영상은 처리가
+// 비동기이고 검출이 수천 건이라 그럴 수 없다. 그래서 검출 좌표는 S3 에 올라간
+// detections.json 을 presigned URL 로 직접 받는다.
+
+/** detections.json 안의 박스 하나: [id, 클래스, 신뢰도, x1, y1, x2, y2] */
+export type VideoDetectionBox = [number, string, number, number, number, number, number];
+
+export interface VideoDetectionsDocument {
+  version: number;
+  width: number;
+  height: number;
+  frame_rate: number;
+  frame_count: number;
+  /** [프레임 인덱스, 박스들]. 검출이 없는 프레임은 들어 있지 않다(희소 저장). */
+  frames: Array<[number, VideoDetectionBox[]]>;
+}
+
+export interface VideoDetectionsInfo {
+  available: boolean;
+  /**
+   * 검출 기록 본문. presigned URL 이 아니라 여기에 실려 온다 — 브라우저가 S3 를 직접
+   * 읽으려면 버킷에 GET 용 CORS 규칙이 필요한데 현재 버킷은 업로드(PUT)만 허용한다.
+   * 수십 KB 짜리 JSON 이라 서버를 거쳐도 부담이 없다.
+   */
+  document: VideoDetectionsDocument | null;
+  correctable: boolean;
+  /**
+   * 처리 중이라 일시적으로 막힌 상태인지. correctable 이 거짓인 이유를 "기다리면 풀림"과
+   * "기다려도 안 풀림"으로 가른다 — 전자만 다시 조회하면 된다.
+   */
+  processing: boolean;
+  retainUntil: string | null;
+  /** 쓸 수 없는 이유. 사용자에게 그대로 보여 줄 수 있는 문장이다. */
+  unavailableReason: string | null;
+  /**
+   * 지금 적용돼 있는 수동 보정. 편집기는 반드시 이 값으로 시작해야 한다 —
+   * 보정은 누적이 아니라 원본에서 다시 그리는 방식이라, 빈 상태로 열면 사용자가
+   * 이전 구간을 보지 못한 채 적용해 그것을 지워 버린다.
+   */
+  appliedCorrection: {
+    regions: VideoManualRegion[];
+    excludedIds: number[];
+    appliedAt: string;
+  } | null;
+}
+
+export interface VideoManualRegion {
+  /** 원본 픽셀 기준. 화면 좌표를 그대로 보내면 기기마다 다른 곳을 가리게 된다. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  startMs: number;
+  endMs: number;
+}
+
+/** 프레임별 검출 기록과 수동 보정 가능 여부를 한 번에 조회한다. */
+export const GetVideoDetections = async (fileId: string): Promise<VideoDetectionsInfo> => {
+  const response = await ApiClient.get(`/api/files/${fileId}/detections`);
+  return response.data;
+};
+
+/**
+ * 수동 보정을 요청한다. 202 는 접수됐다는 뜻일 뿐이고, 진행 상황은 자동 비식별화와
+ * 똑같이 processingStatus 폴링으로 확인한다.
+ */
+export const RequestVideoManualCorrection = async (
+  fileId: string,
+  regions: VideoManualRegion[],
+  excludedIds: number[],
+): Promise<void> => {
+  await ApiClient.post(`/api/files/${fileId}/anonymize/manual`, { regions, excludedIds });
 };

@@ -37,7 +37,10 @@ import {
 } from "@/lib/caseSession";
 import CompareScene from "@/components/cases/CompareScene";
 import ManualEditModal, { type BBox } from "@/components/cases/ManualEditModal";
+import VideoManualEditModal from "@/components/cases/VideoManualEditModal";
+import VideoResultPanel from "@/components/cases/VideoResultPanel";
 import Step3Complete from "@/components/cases/Step3Complete";
+import { isFileViewable } from "@/lib/fileStatus";
 
 /* ─────────────────── types ─────────────────── */
 interface UploadedFile {
@@ -350,12 +353,73 @@ function ImageCompareSlider({
 }
 
 /* ─────────────────── Step 3 Main ────────────── */
+/** 업로드 파일이 영상인지. contentType 이 비어 있는 경우를 대비해 확장자도 본다. */
+function isVideoUpload(file: UploadedFile): boolean {
+  const type = file.uploadResult?.contentType ?? file.file?.type ?? "";
+  if (type.startsWith("video/")) return true;
+  const name = file.uploadResult?.originalFileName ?? file.name ?? "";
+  return /\.(mp4|mov|avi|mkv|webm)$/i.test(name);
+}
+
+/**
+ * 영상 결과 패널. 처리 중에는 진행률, 완료되면 결과 재생과 검출 요약을 보여 준다.
+ *
+ * <p>이미지처럼 "원본 vs 결과" 슬라이더를 두지 않는 이유는 원본을 화면에 띄우지 않기
+ * 때문이다 — 비식별화 이전 영상은 그대로 보여 주면 안 되는 자료다.
+ */
+function VideoResultSection({
+  file,
+  displayName,
+  onVideoManualEdit,
+  reloadKey,
+}: {
+  file: UploadedFile;
+  displayName: string;
+  onVideoManualEdit: (f: UploadedFile, videoUrl: string | null) => void;
+  reloadKey: number;
+}) {
+  const fileId = file.uploadResult?.fileId ?? "";
+
+  return (
+    <div className="flex flex-col gap-[18px]">
+      <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[22px]">
+        <div className="mb-[18px] min-w-0">
+          <h3 className="text-[17px] font-bold text-[#1f2330] tracking-[-0.01em]">
+            영상 비식별화 결과
+          </h3>
+          <p className="text-[12.5px] text-[#6b7388] mt-[3px] truncate">{displayName}</p>
+          <p className="text-[11.5px] text-[#9aa1b3] mt-[2px]">
+            영상은 프레임마다 처리해 수 분이 걸립니다. 완료되면 결과를 재생할 수 있습니다
+          </p>
+        </div>
+
+        <div className="min-h-[320px]">
+          {fileId ? (
+            <VideoResultPanel
+              fileId={fileId}
+              fallbackLabel="결과를 불러오는 중…"
+              onOpenManualEdit={(url) => onVideoManualEdit(file, url)}
+              reloadKey={reloadKey}
+            />
+          ) : (
+            <div className="grid h-[320px] place-items-center rounded-[6px] bg-[#f5f6fa] text-[13px] text-[#9aa1b3]">
+              업로드가 완료되지 않았습니다
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Step3Main({
   data,
   selectedFile,
   reviewedBoxes,
   caseId,
   onManualEdit,
+  onVideoManualEdit,
+  videoReloadKey,
   onInitReviewed,
 }: {
   data: CaseFormData;
@@ -363,6 +427,8 @@ function Step3Main({
   reviewedBoxes: Record<number, BBox[]>;
   caseId: string;
   onManualEdit: (f: UploadedFile) => void;
+  onVideoManualEdit: (f: UploadedFile, videoUrl: string | null) => void;
+  videoReloadKey: number;
   onInitReviewed: (fileId: number, boxes: BBox[]) => void;
 }) {
   const file = selectedFile ?? data.files[0] ?? null;
@@ -490,6 +556,20 @@ function Step3Main({
     aspectRatio: imgNaturalSize ? `${imgNaturalSize.w} / ${imgNaturalSize.h}` : "4/3",
   };
   const sliderReady = mosaicSettled && sizeSettled;
+
+  // 영상은 전혀 다른 화면이 필요하다. 처리가 비동기라 이 시점에 결과가 아직 없을 수 있고,
+  // 원본을 화면에 띄우지 않으므로(그 시점의 원본은 가려지지 않은 파일이다) 전/후 슬라이더가
+  // 성립하지 않는다. 자리 채움 그림(CompareScene)을 그리면 없는 결과를 보여 주게 된다.
+  if (file && isVideoUpload(file)) {
+    return (
+      <VideoResultSection
+        file={file}
+        displayName={displayName}
+        onVideoManualEdit={onVideoManualEdit}
+        reloadKey={videoReloadKey}
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col gap-[18px]">
@@ -776,6 +856,12 @@ export default function NewCasePage() {
   const [selectedFileId, setSelectedFileId] = useState<number | null>(null);
   const [reviewedBoxes, setReviewedBoxes] = useState<Record<number, BBox[]>>({});
   const [editingFile, setEditingFile] = useState<UploadedFile | null>(null);
+  // 영상 수동 보정은 편집 대상과 재생할 결과 URL 을 함께 들고 있어야 한다 —
+  // 편집기가 자기 힘으로 인증된 URL 을 다시 만들면 같은 파일을 두 번 내려받게 된다.
+  const [editingVideo, setEditingVideo] = useState<{ file: UploadedFile; url: string | null } | null>(null);
+  // 보정을 요청하면 결과 패널의 폴링을 다시 깨운다 — 폴링은 완료 시 스스로 멈추므로
+  // 알려 주지 않으면 파일이 다시 처리 중으로 돌아간 것을 화면이 모른다.
+  const [videoReloadKey, setVideoReloadKey] = useState(0);
 
   const totalSize = useMemo(() => files.reduce((s, f) => s + f.sizeMB, 0), [files]);
 
@@ -1030,12 +1116,24 @@ export default function NewCasePage() {
   const goToStep4 = async () => {
     setIsCompressing(true);
     try {
+      // 교체(수동 모자이크 결과 재업로드) 대상만 고른다.
+      //
+      // 영상은 이 단계를 거치지 않는다 — 비식별화는 Processing Service 가 서버에서
+      // 수행하고, 여기의 수동 모자이크는 Konva 기반 이미지 편집이라 애초에 적용되지
+      // 않는다. 게다가 처리 중인 영상은 원본 조회가 409 로 차단되어, 함께 보내면
+      // 검수 완료 자체가 실패한다.
+      const targets = files.filter((f) => {
+        const result = f.uploadResult;
+        if (!result) return false;
+        if (result.contentType?.startsWith("video")) return false;
+        return isFileViewable(result.processingStatus);
+      });
+
       // 수동 모자이크 IDB 우선, 없으면 백엔드 /api/files/{fileId}
       const fetchedFiles = await Promise.all(
-        files.map(async (f) => {
-          const fileId = f.uploadResult?.fileId;
+        targets.map(async (f) => {
+          const fileId = f.uploadResult!.fileId;
           const name = f.uploadResult?.originalFileName ?? f.name;
-          if (!fileId) return new File([], name, { type: "image/jpeg" });
 
           const mosaicBlob = await loadMosaicFile(String(createdCaseId), fileId);
           if (mosaicBlob) {
@@ -1052,17 +1150,17 @@ export default function NewCasePage() {
       // S3 대상 파일은 presigned 직접 재업로드로, NAS 대상 파일은 기존 멀티파트 경로 그대로.
       const s3Indices: number[] = [];
       const nasIndices: number[] = [];
-      files.forEach((f, i) => {
+      targets.forEach((f, i) => {
         (f.policy === "internal" ? nasIndices : s3Indices).push(i);
       });
 
       const directTasks: DirectReplaceTask[] = s3Indices.map((i) => ({
-        id: files[i].id,
-        fileId: files[i].uploadResult?.fileId ?? "",
+        id: targets[i].id,
+        fileId: targets[i].uploadResult!.fileId,
         file: fetchedFiles[i],
       }));
       const nasFiles = nasIndices.map((i) => fetchedFiles[i]);
-      const nasMetadata = nasIndices.map((i) => ({ fileId: files[i].uploadResult?.fileId ?? "" }));
+      const nasMetadata = nasIndices.map((i) => ({ fileId: targets[i].uploadResult!.fileId }));
 
       const [directOutcomes, nasResults] = await Promise.all([
         replaceFilesDirect(directTasks),
@@ -1076,22 +1174,15 @@ export default function NewCasePage() {
         throw failed.error;
       }
 
-      // Step3Complete가 replaceResults[i]를 files[i]와 위치로 대응시키므로, id로
-      // 상관관계를 맺은 뒤 반드시 files 원래 순서대로 다시 나열해야 한다.
-      const resultById = new Map<number, ReplaceFileResult>();
-      directOutcomes.forEach((o) => {
-        if (o.result) resultById.set(o.id, o.result);
-      });
-      nasIndices.forEach((i, j) => {
-        const result = nasResults[j];
-        if (result) resultById.set(files[i].id, result);
-      });
+      // Step3Complete 는 결과를 fileId 로 대응시키므로 순서는 중요하지 않다.
+      // (교체 대상이 아닌 영상이 섞이면서 files 와 길이가 달라지기 때문에,
+      //  위치 기반 대응은 더 이상 성립하지 않는다.)
+      const results = [
+        ...directOutcomes.map((o) => o.result),
+        ...nasResults,
+      ].filter((r): r is ReplaceFileResult => Boolean(r));
 
-      const orderedResults = files
-        .map((f) => resultById.get(f.id))
-        .filter((r): r is ReplaceFileResult => Boolean(r));
-
-      setReplaceResults(orderedResults);
+      setReplaceResults(results);
       setStep(4);
     } catch {
       toast.error("파일 저장에 실패했습니다. 다시 시도해주세요.");
@@ -1752,6 +1843,8 @@ export default function NewCasePage() {
             reviewedBoxes={reviewedBoxes}
             caseId={String(createdCaseId ?? "")}
             onManualEdit={(f) => setEditingFile(f)}
+            onVideoManualEdit={(f, url) => setEditingVideo({ file: f, url })}
+            videoReloadKey={videoReloadKey}
             onInitReviewed={(fileId, boxes) => setReviewedBoxes((prev) => ({ ...prev, [fileId]: boxes }))}
           />
           <Step3Side
@@ -1771,6 +1864,20 @@ export default function NewCasePage() {
           files={files}
           replaceResults={replaceResults}
           reviewedBoxes={reviewedBoxes}
+        />
+      )}
+
+      {/* 영상 수동 보정 — 이미지와 달리 시간 축이 있어 별도 편집기를 쓴다 */}
+      {editingVideo && (
+        <VideoManualEditModal
+          fileId={editingVideo.file.uploadResult?.fileId ?? ""}
+          fileName={editingVideo.file.uploadResult?.originalFileName ?? editingVideo.file.name}
+          videoUrl={editingVideo.url}
+          onClose={() => setEditingVideo(null)}
+          onRequested={() => {
+            setEditingVideo(null);
+            setVideoReloadKey((n) => n + 1);
+          }}
         />
       )}
 

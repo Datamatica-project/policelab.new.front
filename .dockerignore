@@ -1,0 +1,8 @@
+# 호스트의 node_modules 를 이미지에 넣으면 플랫폼이 다른 네이티브 바이너리가 섞여
+# 기동이 깨진다. 의존성은 항상 이미지 안에서 npm ci 로 설치한다.
+node_modules
+.next
+.git
+.vercel
+tsconfig.tsbuildinfo
+npm-debug.log*

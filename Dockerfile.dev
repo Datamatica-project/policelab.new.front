@@ -1,0 +1,19 @@
+# 로컬 통합 테스트용 개발 서버 이미지.
+#
+# 운영 배포는 Vercel 이 맡으므로 프로덕션 빌드(next build/start)는 여기 넣지 않는다.
+# 이 이미지의 목적은 docker-compose-video-test.yml 로 백엔드와 프론트를 한 번에
+# 띄워 영상 업로드 흐름을 끝까지 확인하는 것이다.
+FROM node:22-alpine
+
+WORKDIR /app
+
+# 의존성만 먼저 복사해 소스 변경 시 npm ci 를 다시 돌리지 않는다.
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+
+EXPOSE 3000
+
+# 컨테이너 밖(호스트 브라우저)에서 접속하므로 0.0.0.0 에 바인딩해야 한다.
+CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", "3000"]
