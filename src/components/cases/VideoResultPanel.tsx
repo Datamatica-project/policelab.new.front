@@ -7,7 +7,7 @@ import {
   type VideoDetectionsDocument,
   type VideoDetectionsInfo,
 } from "@/lib/api";
-import { useAuthedImage } from "@/hooks/useAuthedImage";
+import { useVideoSource } from "@/hooks/useVideoSource";
 import { FILE_PROCESSING_STATUS, isFileProcessing } from "@/lib/fileStatus";
 
 /**
@@ -106,7 +106,9 @@ export default function VideoResultPanel({
     };
   }, [fileId, processing, failed, status, reloadKey]);
 
-  const authed = useAuthedImage(processing ? null : resultUrl);
+  // 결과 영상은 presigned URL 로 즉시 재생한다. blob 으로 통째로 받으면 수백 MB 를
+  // 다 내려받을 때까지 재생기가 뜨지 않는다.
+  const authed = useVideoSource(processing ? null : fileId, resultUrl);
 
   const summary = useMemo(() => {
     if (!doc) return null;
@@ -167,7 +169,11 @@ export default function VideoResultPanel({
           <video src={authed.src} controls className="absolute inset-0 h-full w-full" />
         ) : (
           <div className="absolute inset-0 grid place-items-center text-xs text-gray-400">
-            {authed.isError ? "결과 영상을 불러오지 못했습니다" : (fallbackLabel ?? "불러오는 중…")}
+            {authed.isError
+              ? "결과 영상을 불러오지 못했습니다"
+              : authed.mode === "blob"
+                ? "영상을 불러오는 중입니다. 용량이 커서 시간이 걸릴 수 있습니다."
+                : (fallbackLabel ?? "불러오는 중…")}
           </div>
         )}
       </div>

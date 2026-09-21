@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import JSZip from "jszip";
 import { GetCaseDetail, UpdateCaseStatus, ApiClient, toFileApiPath, type FileListResponse, type CaseDetailResponse } from "@/lib/api";
 import { useAuthedImage } from "@/hooks/useAuthedImage";
+import { useVideoSource } from "@/hooks/useVideoSource";
 import { useFileProcessingPoll } from "@/hooks/useFileProcessingPoll";
 import FileProcessingBadge from "@/components/cases/FileProcessingBadge";
 import { describeFileStatus, isFileViewable } from "@/lib/fileStatus";
@@ -50,10 +51,13 @@ async function downloadFile(file: FileListResponse) {
 function PreviewModal({ file, onClose }: { file: FileListResponse; onClose: () => void }) {
   const isImage = file.type?.startsWith("image");
   const isVideo = file.type?.startsWith("video");
+  const viewable = isFileViewable(file.processingStatus);
   // 처리 중·격리된 파일은 백엔드가 409 로 막으므로 아예 요청하지 않는다.
-  const { src: previewUrl } = useAuthedImage(
-    isFileViewable(file.processingStatus) ? file.url : null,
-  );
+  const { src: imageUrl } = useAuthedImage(viewable && !isVideo ? file.url : null);
+  // 영상은 presigned URL 로 즉시 재생한다. 이미지처럼 blob 으로 통째로 받으면
+  // 수백 MB 를 다 내려받을 때까지 재생기가 뜨지 않는다.
+  const video = useVideoSource(viewable && isVideo ? file.id : null, file.url);
+  const previewUrl = isVideo ? video.src : imageUrl;
 
   return (
     <div
@@ -108,6 +112,17 @@ function PreviewModal({ file, onClose }: { file: FileListResponse; onClose: () =
             >
               <FileText size={48} strokeWidth={1.2} />
               <span className="text-[14px] font-medium">{file.name}</span>
+              {/* 영상이 준비 중인데 아무 설명이 없으면 "다운로드 전용 화면"으로 오해한다. */}
+              {isVideo && video.isLoading && (
+                <span className="text-[12.5px]">
+                  {video.mode === "blob"
+                    ? "영상을 불러오는 중입니다. 용량이 커서 시간이 걸릴 수 있습니다."
+                    : "영상을 준비하는 중입니다..."}
+                </span>
+              )}
+              {isVideo && video.isError && (
+                <span className="text-[12.5px]">영상을 불러오지 못했습니다. 다운로드해 확인해 주세요.</span>
+              )}
               <button
                 onClick={() => { downloadFile(file).catch(() => toast.error("다운로드에 실패했습니다.")); }}
                 className="mt-1 px-4 py-2 bg-[#1d2c4e] text-white text-[13px] font-semibold rounded-[6px] hover:bg-[#2b3f6c] transition-colors"

@@ -615,6 +615,31 @@ export interface VideoManualRegion {
   endMs: number;
 }
 
+export interface VideoPlaybackInfo {
+  /**
+   * presigned 재생 URL 을 쓸 수 있는지.
+   *
+   * 거짓인 경우가 정상적으로 존재한다 — NAS 저장, 봉투 암호화, 처리 중, 격리.
+   * 호출부는 반드시 이 값을 보고 기존 API 경로로 물러설 수 있어야 한다.
+   */
+  available: boolean;
+  /** `<video src>` 에 그대로 넣는다. 인증 헤더가 필요 없다. */
+  url: string | null;
+  expiresAt: string | null;
+  unavailableReason: string | null;
+}
+
+/**
+ * 영상을 바로 재생할 수 있는 presigned URL 을 받는다.
+ *
+ * 항상 비식별화 <b>결과물</b>을 가리킨다. 처리 중인 파일은 백엔드가 거절한다 —
+ * 그 시점의 저장 경로는 아직 비식별화 이전 원본이기 때문이다.
+ */
+export const GetVideoPlayUrl = async (fileId: string): Promise<VideoPlaybackInfo> => {
+  const response = await ApiClient.get(`/api/files/${fileId}/play-url`);
+  return response.data;
+};
+
 /** 프레임별 검출 기록과 수동 보정 가능 여부를 한 번에 조회한다. */
 export const GetVideoDetections = async (fileId: string): Promise<VideoDetectionsInfo> => {
   const response = await ApiClient.get(`/api/files/${fileId}/detections`);

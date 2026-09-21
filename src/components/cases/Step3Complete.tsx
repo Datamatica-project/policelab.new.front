@@ -26,6 +26,7 @@ import type { FileUploadResult, ReplaceFileResult } from "@/lib/api";
 import { ApiClient } from "@/lib/api";
 import { useFileProcessingPoll } from "@/hooks/useFileProcessingPoll";
 import { useAuthedImage } from "@/hooks/useAuthedImage";
+import { useVideoSource } from "@/hooks/useVideoSource";
 import { describeFileStatus, isFileViewable } from "@/lib/fileStatus";
 
 interface UploadedFile {
@@ -88,8 +89,13 @@ function PreviewModal({
   onClose: () => void;
 }) {
   const isVideo = isVideoFile(file);
-  // 영상은 <img> 로 그릴 수 없어 blob 을 직접 받아 <video> 에 넣는다.
-  const { src: videoUrl } = useAuthedImage(isVideo ? file.storageUrl : null);
+  // 영상은 presigned URL 로 즉시 재생한다. blob 으로 통째로 받던 방식은 수백 MB 짜리
+  // 블랙박스 영상에서 다 받을 때까지 재생기가 뜨지 않았다.
+  const video = useVideoSource(
+    isVideo ? (file.uploadResult?.fileId ?? null) : null,
+    file.storageUrl,
+  );
+  const videoUrl = video.src;
 
   return (
     <div
