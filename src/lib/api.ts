@@ -327,6 +327,11 @@ export interface FileProcessingDetail {
   thumbnail?: string | null;
   downloadUrl?: string | null;
   durationSec?: number | null;
+  /**
+   * 현재 파일 크기(바이트). 영상은 비식별화가 끝나면 결과물 크기로 바뀐다.
+   * 표시용 문자열(size)이 아니라 이 값을 써야 절감률을 계산할 수 있다.
+   */
+  sizeBytes?: number | null;
 }
 
 export const GetFileProcessingDetail = async (

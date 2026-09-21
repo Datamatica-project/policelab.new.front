@@ -20,6 +20,11 @@ export interface FileStatusSnapshot {
   url: string | null;
   thumbnail: string | null;
   downloadUrl: string | null;
+  /**
+   * 갱신된 파일 크기(바이트). 영상은 비식별화 후 결과물 크기로 바뀌므로, 업로드 시점의
+   * 크기를 그대로 쓰면 압축 절감률이 0% 로 보인다.
+   */
+  sizeBytes: number | null;
   /** 연속 조회 실패 횟수. 한계를 넘으면 해당 파일 폴링을 포기한다 */
   failures: number;
 }
@@ -47,6 +52,7 @@ function toSnapshot(detail: FileProcessingDetail): FileStatusSnapshot {
     url: detail.url ?? null,
     thumbnail: detail.thumbnail ?? null,
     downloadUrl: detail.downloadUrl ?? null,
+    sizeBytes: detail.sizeBytes ?? null,
     failures: 0,
   };
 }
@@ -58,6 +64,7 @@ function withFailure(prev: FileStatusSnapshot | undefined): FileStatusSnapshot {
     url: prev?.url ?? null,
     thumbnail: prev?.thumbnail ?? null,
     downloadUrl: prev?.downloadUrl ?? null,
+    sizeBytes: prev?.sizeBytes ?? null,
     failures: (prev?.failures ?? 0) + 1,
   };
 }
@@ -88,6 +95,40 @@ export function useFileProcessingPoll(
   intervalMs: number = DEFAULT_INTERVAL_MS,
 ): FileProcessingPoll {
   const [snapshots, setSnapshots] = useState<Record<string, FileStatusSnapshot>>({});
+
+  /**
+   * 마운트 시 한 번은 <b>모든</b> 파일을 조회한다.
+   *
+   * <p>폴링 대상은 "처리 중"인 파일뿐이라, 페이지를 열었을 때 이미 완료된 파일은 한 번도
+   * 조회되지 않는다. 그러면 업로드 시점의 값만 남아 — 영상은 비식별화 후 크기·URL 이
+   * 모두 바뀌는데도 — 압축 절감률이 0% 로 보이고 URL 도 옛것을 가리킨다.
+   *
+   * <p>목록이 바뀔 때만 돈다. 이후 갱신은 폴링이 맡는다.
+   */
+  const allKey = files.map((file) => file.id).join(",");
+
+  useEffect(() => {
+    if (!allKey) return;
+    const ids = allKey.split(",");
+    let cancelled = false;
+
+    Promise.allSettled(ids.map((id) => GetFileProcessingDetail(id))).then((results) => {
+      if (cancelled) return;
+      setSnapshots((prev) => {
+        const next = { ...prev };
+        results.forEach((result, i) => {
+          if (result.status === "fulfilled") {
+            next[ids[i]] = toSnapshot(result.value);
+          }
+        });
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [allKey]);
 
   // 폴링 대상: 아직 처리 중이고, 연속 실패로 포기하지 않은 파일.
   // 스냅샷의 상태가 목록의 상태보다 최신이므로 그쪽을 우선한다.
