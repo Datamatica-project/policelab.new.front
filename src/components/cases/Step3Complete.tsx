@@ -200,11 +200,20 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
         result?.storageUrl ?? snapshot?.url ?? f.uploadResult?.storageUrl;
       const processingStatus = snapshot?.processingStatus ?? f.uploadResult?.processingStatus;
       const original = f.sizeMB;
+      // 크기가 바뀌는 경로가 둘이다.
+      //   - 이미지: 수동 보정본을 /replace 로 교체 → replaceResult.fileSize
+      //   - 영상  : 비식별화가 끝나면 서버의 파일 크기 자체가 결과물 것으로 바뀐다.
+      //            (교체 경로를 타지 않으므로 replaceResult 가 없다)
+      // 영상을 빠뜨리면 after 가 원본과 같아져, 실제로는 크게 줄었는데 절감률이 0% 로 뜬다.
       const after = result
         ? +(result.fileSize / (1024 * 1024)).toFixed(2)
-        : original;
+        : snapshot?.sizeBytes
+          ? +(snapshot.sizeBytes / (1024 * 1024)).toFixed(2)
+          : original;
+      // 음수를 깎지 않는다. 비식별화는 재인코딩이라 원본 인코딩에 따라 커질 수도 있고,
+      // 저장 용량을 가늠하는 화면에서 증가를 0% 로 숨기면 잘못된 판단을 부른다.
       const saved = +(original - after).toFixed(2);
-      const rate = original > 0 ? +((Math.max(0, saved) / original) * 100).toFixed(1) : 0;
+      const rate = original > 0 ? +((saved / original) * 100).toFixed(1) : 0;
       return {
         ...f,
         displayName,
@@ -224,7 +233,12 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
   const totalOriginal = compressed.reduce((s, f) => s + f.original, 0);
   const totalAfter = compressed.reduce((s, f) => s + f.after, 0);
   const totalSaved = totalOriginal - totalAfter;
-  const totalRate = totalOriginal > 0 ? (Math.max(0, totalSaved) / totalOriginal) * 100 : 0;
+  const totalRate = totalOriginal > 0 ? (totalSaved / totalOriginal) * 100 : 0;
+  /** 줄었으면 초록, 늘었으면 주황. 증가를 초록으로 칠하면 좋은 소식처럼 읽힌다. */
+  const deltaColor = totalSaved >= 0 ? "#1f9d55" : "#c2680a";
+  /** 부호를 반드시 붙인다 — "6.24 MB"만으로는 줄었는지 늘었는지 알 수 없다. */
+  const signed = (mb: number) => `${mb >= 0 ? "-" : "+"}${Math.abs(mb).toFixed(2)} MB`;
+  const signedRate = (pct: number) => `${pct >= 0 ? "-" : "+"}${Math.abs(pct).toFixed(1)}%`;
 
   const canNext = carouselStart + 3 < compressed.length;
   const canPrev = carouselStart > 0;
@@ -271,7 +285,7 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
           totalFiles: compressed.length,
           totalOriginalSizeMB: +totalOriginal.toFixed(2),
           totalCompressedSizeMB: +totalAfter.toFixed(2),
-          savedSizeMB: +Math.max(0, totalSaved).toFixed(2),
+          savedSizeMB: +totalSaved.toFixed(2),
           savedRate: `${totalRate.toFixed(1)}%`,
         },
         files: compressed.map((f) => ({
@@ -461,7 +475,7 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
               { k: "생성 날짜", v: TODAY_DISPLAY },
               { k: "파일 개수", v: `${compressed.length}개` },
               { k: "원본 용량", v: `${totalOriginal.toFixed(2)} MB` },
-              { k: "압축 후", v: `${totalAfter.toFixed(2)} MB` },
+              { k: "처리 후", v: `${totalAfter.toFixed(2)} MB` },
             ].map(({ k, v }) => (
               <div
                 key={k}
@@ -489,15 +503,15 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
         <div className="bg-white border border-[#e6e8ef] rounded-[10px] p-[22px] flex flex-col">
           <h3 className="text-[16px] font-bold text-[#1f2330] flex items-center gap-2 mb-4 whitespace-nowrap">
             <BarChart2 size={16} className="text-[#1d2c4e]" />
-            압축 결과 요약
+            용량 변화 요약
           </h3>
           <div className="grid grid-cols-2 border border-[#eef0f5] rounded-[8px] overflow-hidden flex-1">
             {[
-              { label: "원본 총 용량", value: `${totalOriginal.toFixed(2)} MB`, green: false },
-              { label: "압축 후 총 용량", value: `${totalAfter.toFixed(2)} MB`, green: false },
-              { label: "절감 용량", value: `${Math.max(0, totalSaved).toFixed(2)} MB`, green: false },
-              { label: "절감률", value: `${totalRate.toFixed(1)}%`, green: true },
-            ].map(({ label, value, green }, i) => (
+              { label: "원본 총 용량", value: `${totalOriginal.toFixed(2)} MB`, color: undefined },
+              { label: "처리 후 총 용량", value: `${totalAfter.toFixed(2)} MB`, color: undefined },
+              { label: "용량 변화", value: signed(totalSaved), color: deltaColor },
+              { label: "변화율", value: signedRate(totalRate), color: deltaColor },
+            ].map(({ label, value, color }, i) => (
               <div
                 key={label}
                 className="p-[16px_18px] flex flex-col justify-center"
@@ -509,7 +523,7 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
                 <p className="text-[12.5px] text-[#6b7388] mb-[6px]">{label}</p>
                 <p
                   className="text-[20px] font-extrabold tracking-[-0.01em]"
-                  style={{ color: green ? "#1f9d55" : "#1f2330" }}
+                  style={{ color: color ?? "#1f2330" }}
                 >
                   {value}
                 </p>
@@ -524,7 +538,7 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
         <div className="flex items-center gap-2 mb-4">
           <h3 className="text-[16px] font-bold text-[#1f2330] flex items-center gap-2 whitespace-nowrap">
             <Activity size={16} className="text-[#1d2c4e]" />
-            파일별 압축 정보
+            파일별 용량 변화
           </h3>
           <span className="bg-[#f0f4fa] text-[#1d2c4e] text-[12px] font-bold px-[10px] py-[3px] rounded-full whitespace-nowrap">
             총 {compressed.length}개
@@ -533,7 +547,7 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
         <table className="w-full border-collapse">
           <thead>
             <tr>
-              {["파일명", "원본 용량", "압축 후 용량", "절감 용량", "절감률", "최종 상태", "미리보기"].map(
+              {["파일명", "원본 용량", "처리 후 용량", "용량 변화", "변화율", "최종 상태", "미리보기"].map(
                 (h, i) => (
                   <th
                     key={h}
@@ -573,11 +587,17 @@ export default function Step3Complete({ caseName, caseNumber, officer, files, re
                 <td className="py-4 border-b border-[#f0f1f5] text-[13.5px] text-[#3a4055]">
                   {f.after.toFixed(2)} MB
                 </td>
-                <td className="py-4 border-b border-[#f0f1f5] text-[13.5px] text-[#3a4055]">
-                  {Math.max(0, f.saved).toFixed(2)} MB
+                <td
+                  className="py-4 border-b border-[#f0f1f5] text-[13.5px]"
+                  style={{ color: f.saved >= 0 ? "#1f9d55" : "#c2680a" }}
+                >
+                  {signed(f.saved)}
                 </td>
-                <td className="py-4 border-b border-[#f0f1f5] text-[13.5px] font-bold text-[#1f9d55]">
-                  {f.rate.toFixed(1)}%
+                <td
+                  className="py-4 border-b border-[#f0f1f5] text-[13.5px] font-bold"
+                  style={{ color: f.rate >= 0 ? "#1f9d55" : "#c2680a" }}
+                >
+                  {signedRate(f.rate)}
                 </td>
                 <td className="py-4 border-b border-[#f0f1f5]">
                   {f.viewable ? (
