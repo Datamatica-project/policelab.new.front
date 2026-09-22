@@ -222,12 +222,49 @@ export interface CaseResponse {
   accessType: "OWNED" | "SHARED";
 }
 
+/**
+ * 목록 응답의 페이지 정보. 화면에서 쓰는 정규화된 형태다.
+ *
+ * 서버(Spring Data)는 `{content, page:{size,number,totalElements,totalPages}}` 로 내려주지만,
+ * 설정/버전에 따라 최상위에 totalPages 를 두는 형태로 바뀔 수 있다. 두 형태 모두
+ * 여기로 흡수해 화면 코드가 한 가지만 알면 되게 한다.
+ */
 export interface CasePage {
   content: CaseResponse[];
   totalPages: number;
   totalElements: number;
   number: number; // 현재 페이지 (0-based)
   size: number;
+}
+
+/** 서버가 내려줄 수 있는 두 가지 페이지 응답 형태 */
+interface RawPageResponse<T> {
+  content?: T[];
+  page?: { size?: number; number?: number; totalElements?: number; totalPages?: number };
+  totalPages?: number;
+  totalElements?: number;
+  number?: number;
+  size?: number;
+}
+
+/**
+ * 어느 형태로 오든 평평한 CasePage 로 맞춘다.
+ *
+ * 값이 없으면 0/1 로 떨어뜨려 화면이 NaN 이나 undefined 를 만나지 않게 한다.
+ * (undefined 가 그대로 흘러들면 `totalPages > 1` 같은 비교가 조용히 false 가 된다.)
+ */
+function normalizeCasePage(raw: RawPageResponse<CaseResponse>, fallbackSize: number): CasePage {
+  const content = raw?.content ?? [];
+  const totalElements = raw?.page?.totalElements ?? raw?.totalElements ?? content.length;
+  const totalPages = raw?.page?.totalPages ?? raw?.totalPages ?? 1;
+
+  return {
+    content,
+    totalElements,
+    totalPages: Math.max(1, totalPages),
+    number: raw?.page?.number ?? raw?.number ?? 0,
+    size: raw?.page?.size ?? raw?.size ?? fallbackSize,
+  };
 }
 
 export const DeleteCase = async (caseId: string): Promise<void> => {
@@ -273,15 +310,58 @@ export const UpdateCase = async (
   return response.data;
 };
 
-export const GetCases = async (
-  page = 0,
-  size = 10,
-  typeShare: CaseAccessType = "ALL",
-): Promise<CasePage> => {
-  const response = await ApiClient.get("/api/cases", {
-    params: { page, size, typeShare },
-  });
-  return response.data;
+/** 검색 대상 필드. 서버 enum(CaseSearchField)과 값이 1:1로 대응한다. */
+export type CaseSearchField = "TITLE" | "MANAGER" | "ALL";
+
+/** 정렬 기준. 서버 enum(CaseSortOrder)과 값이 1:1로 대응한다. */
+export type CaseSortOrder = "LATEST" | "OLDEST" | "TITLE";
+
+/** 상태 필터. null 이면 전체(OPEN + CLOSED) */
+export type CaseStatusFilter = "OPEN" | "CLOSED";
+
+export interface GetCasesParams {
+  /** 0-based */
+  page?: number;
+  size?: number;
+  typeShare?: CaseAccessType;
+  /** 비어 있거나 공백뿐이면 검색하지 않는다 */
+  search?: string;
+  searchField?: CaseSearchField;
+  status?: CaseStatusFilter | null;
+  sort?: CaseSortOrder;
+}
+
+/**
+ * 사건 목록 조회.
+ *
+ * 검색·상태·정렬을 서버로 넘긴다. 받아온 페이지만 화면에서 거르면 다른 페이지의
+ * 사건이 검색에서 누락되고 totalPages 도 실제 결과와 어긋나기 때문이다.
+ */
+export const GetCases = async (params: GetCasesParams = {}): Promise<CasePage> => {
+  const {
+    page = 0,
+    size = 10,
+    typeShare = "ALL",
+    search,
+    searchField = "TITLE",
+    status = null,
+    sort = "LATEST",
+  } = params;
+
+  const query: Record<string, string | number> = { page, size, typeShare, sort };
+
+  // 빈 검색어/전체 상태는 아예 보내지 않는다 (서버에서 "필터 없음"으로 처리)
+  const trimmed = search?.trim();
+  if (trimmed) {
+    query.search = trimmed;
+    query.searchField = searchField;
+  }
+  if (status) {
+    query.status = status;
+  }
+
+  const response = await ApiClient.get("/api/cases", { params: query });
+  return normalizeCasePage(response.data, size);
 };
 
 export interface FileListResponse {

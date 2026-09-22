@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Search, ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { Search, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Select,
@@ -11,7 +11,16 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import CaseCard from "@/components/cases/CaseCard";
-import { GetCases, type CaseResponse, type CaseAccessType } from "@/lib/api";
+import PaginationBar from "@/components/common/PaginationBar";
+import { useDebouncedCallback } from "@/hooks/useDebouncedCallback";
+import {
+  GetCases,
+  type CaseResponse,
+  type CaseAccessType,
+  type CaseSearchField,
+  type CaseSortOrder,
+  type CaseStatusFilter,
+} from "@/lib/api";
 import type { CaseData, CaseStatus } from "@/lib/case-data";
 import { useCaseStore } from "@/store/caseStore";
 
@@ -33,25 +42,29 @@ function toCaseData(c: CaseResponse): CaseData {
   };
 }
 
-const SEARCH_FIELD_LABELS: Record<string, string> = {
-  title: "제목",
-  manager: "담당자",
-  all: "전체 항목",
+const SEARCH_FIELD_LABELS: Record<CaseSearchField, string> = {
+  TITLE: "제목",
+  MANAGER: "담당자",
+  ALL: "전체 항목",
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  all: "전체",
-  진행중: "진행중",
-  사건종료: "사건종료",
+/** UI 전용 상태 필터 값. "ALL" 은 서버로 보내지 않고 null 로 바꾼다. */
+type StatusFilterValue = "ALL" | CaseStatusFilter;
+
+const STATUS_LABELS: Record<StatusFilterValue, string> = {
+  ALL: "전체",
+  OPEN: "진행중",
+  CLOSED: "사건종료",
 };
 
-const SORT_LABELS: Record<string, string> = {
-  latest: "최신순",
-  oldest: "오래된순",
-  title: "제목순",
+const SORT_LABELS: Record<CaseSortOrder, string> = {
+  LATEST: "최신순",
+  OLDEST: "오래된순",
+  TITLE: "제목순",
 };
 
 const PAGE_SIZE = 12;
+const SEARCH_DEBOUNCE_MS = 300;
 
 const ACCESS_TABS: { label: string; value: CaseAccessType }[] = [
   { label: "전체", value: "ALL" },
@@ -59,74 +72,152 @@ const ACCESS_TABS: { label: string; value: CaseAccessType }[] = [
   { label: "공유받은 사건", value: "SHARED" },
 ];
 
+/**
+ * 목록 조회 조건. 검색·필터·정렬·페이지를 한 덩어리로 들고 있는다.
+ *
+ * 따로 쪼개 두면 "필터 변경 → 1페이지로 이동"이 상태 갱신 두 번으로 나뉘어
+ * 이전 페이지 번호로 한 번, 0페이지로 또 한 번 요청이 나간다.
+ */
+interface CaseQuery {
+  /** 0-based (서버 규격) */
+  page: number;
+  typeShare: CaseAccessType;
+  search: string;
+  searchField: CaseSearchField;
+  status: CaseStatusFilter | null;
+  sort: CaseSortOrder;
+}
+
+const INITIAL_QUERY: CaseQuery = {
+  page: 0,
+  typeShare: "ALL",
+  search: "",
+  searchField: "TITLE",
+  status: null,
+  sort: "LATEST",
+};
+
 export default function CasesPage() {
   const router = useRouter();
   const { setSidebarCases } = useCaseStore();
+
+  const [query, setQuery] = useState<CaseQuery>(INITIAL_QUERY);
+  const [searchInput, setSearchInput] = useState("");
+
   const [cases, setCases] = useState<CaseData[]>([]);
   const [totalPages, setTotalPages] = useState(1);
-  const [currentPage, setCurrentPage] = useState(0); // 0-based (서버)
-  const [isLoading, setIsLoading] = useState(false);
-  const [accessTab, setAccessTab] = useState<CaseAccessType>("ALL");
+  const [totalElements, setTotalElements] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchField, setSearchField] = useState("title");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [sortOrder, setSortOrder] = useState("latest");
+  // 삭제/수정 후 목록을 다시 받아오기 위한 트리거
+  const [reloadToken, setReloadToken] = useState(0);
+  // 늦게 도착한 옛 응답이 최신 결과를 덮어쓰지 않도록 요청 순번을 기록한다
+  const requestIdRef = useRef(0);
 
-  const resetPage = () => setCurrentPage(0);
+  /** 필터를 바꾸면 항상 첫 페이지부터 다시 본다 */
+  const patchFilter = useCallback((patch: Partial<Omit<CaseQuery, "page">>) => {
+    setQuery((prev) => ({ ...prev, ...patch, page: 0 }));
+  }, []);
+
+  const goToPage = useCallback((uiPage: number) => {
+    setQuery((prev) => ({ ...prev, page: Math.max(0, uiPage - 1) }));
+  }, []);
+
+  // 타이핑이 멈춘 뒤에야 검색어를 조회 조건에 반영한다 (글자마다 요청이 나가지 않도록)
+  const applySearch = useDebouncedCallback(
+    (value: string) => patchFilter({ search: value.trim() }),
+    SEARCH_DEBOUNCE_MS,
+  );
+
+  const handleSearchChange = useCallback(
+    (value: string) => {
+      setSearchInput(value);
+      applySearch(value);
+    },
+    [applySearch],
+  );
 
   useEffect(() => {
-    const fetch = async () => {
+    const requestId = ++requestIdRef.current;
+    const isStale = () => requestId !== requestIdRef.current;
+
+    const load = async () => {
       setIsLoading(true);
       try {
-        const data = await GetCases(currentPage, PAGE_SIZE, accessTab);
-        const mapped = data.content.map(toCaseData);
-        setCases(mapped);
-        setTotalPages(data.totalPages);
-        // 첫 페이지 전체 탭일 때만 사이드바 동기화
-        if (currentPage === 0 && accessTab === "ALL") {
+        const data = await GetCases({
+          page: query.page,
+          size: PAGE_SIZE,
+          typeShare: query.typeShare,
+          search: query.search,
+          searchField: query.searchField,
+          status: query.status,
+          sort: query.sort,
+        });
+        if (isStale()) return;
+
+        setCases(data.content.map(toCaseData));
+        setTotalPages(Math.max(1, data.totalPages ?? 1));
+        setTotalElements(data.totalElements ?? 0);
+        setLoadFailed(false);
+
+        // 사이드바는 필터 없는 첫 페이지일 때만 동기화 (검색 결과로 덮어쓰지 않는다)
+        const isUnfiltered =
+          query.page === 0 && query.typeShare === "ALL" && !query.search && !query.status;
+        if (isUnfiltered) {
           setSidebarCases(data.content.map((c) => ({ id: c.caseId, title: c.title })));
         }
       } catch {
+        if (isStale()) return;
         setCases([]);
+        setTotalPages(1);
+        setTotalElements(0);
+        setLoadFailed(true);
       } finally {
-        setIsLoading(false);
+        if (!isStale()) setIsLoading(false);
       }
     };
-    fetch();
-  }, [currentPage, accessTab]);
 
-  const filtered = useMemo(() => {
-    let list = [...cases];
-    const q = searchQuery.toLowerCase().trim();
-    if (q) {
-      list = list.filter((c) => {
-        if (searchField === "title") return c.title.toLowerCase().includes(q);
-        if (searchField === "manager") return c.manager.toLowerCase().includes(q);
-        return c.title.toLowerCase().includes(q) || c.manager.toLowerCase().includes(q);
-      });
-    }
-    if (statusFilter !== "all") {
-      list = list.filter((c) => c.status === (statusFilter as CaseStatus));
-    }
-    if (sortOrder === "oldest") {
-      list.sort((a, b) => a.date.localeCompare(b.date));
-    } else if (sortOrder === "title") {
-      list.sort((a, b) => a.title.localeCompare(b.title));
-    } else {
-      list.sort((a, b) => b.date.localeCompare(a.date));
-    }
-    return list;
-  }, [cases, searchQuery, searchField, statusFilter, sortOrder]);
+    load();
+  }, [query, reloadToken, setSidebarCases]);
 
-  // UI 페이지는 1-based
-  const uiPage = currentPage + 1;
+  const reload = useCallback(() => setReloadToken((t) => t + 1), []);
 
-  const pageNumbers = useMemo(() => {
-    const count = Math.min(10, totalPages);
-    const start = Math.max(1, Math.min(uiPage - 4, totalPages - count + 1));
-    return Array.from({ length: count }, (_, i) => start + i);
-  }, [uiPage, totalPages]);
+  /**
+   * 삭제된 항목은 화면에서 먼저 지우고 목록을 다시 받는다.
+   * 다시 받지 않으면 이 페이지만 11건으로 남고 전체 건수도 어긋난다.
+   */
+  const handleDeleted = useCallback(
+    (deletedId: string) => {
+      const remaining = cases.filter((x) => x.id !== deletedId);
+      setCases(remaining);
+
+      if (remaining.length === 0 && query.page > 0) {
+        // 이 페이지의 마지막 한 건을 지웠다면 빈 화면 대신 이전 페이지를 보여준다.
+        // page 가 바뀌면 조회 effect 가 다시 도므로 별도 reload 는 필요 없다.
+        setQuery((q) => ({ ...q, page: q.page - 1 }));
+        return;
+      }
+      reload();
+    },
+    [cases, query.page, reload],
+  );
+
+  /**
+   * 수정된 내용을 즉시 반영하되, 정렬·필터 기준이 바뀌었을 수 있으므로 다시 받아온다.
+   * (예: 진행중만 보는 중에 사건을 종료 처리한 경우)
+   */
+  const handleUpdated = useCallback(
+    (updatedId: string, updated: Partial<CaseData>) => {
+      setCases((prev) => prev.map((x) => (x.id === updatedId ? { ...x, ...updated } : x)));
+      reload();
+    },
+    [reload],
+  );
+
+  const statusValue: StatusFilterValue = query.status ?? "ALL";
+  const uiPage = query.page + 1;
+  const hasFilter = Boolean(query.search) || query.status !== null;
 
   return (
     <div className="pb-10">
@@ -153,10 +244,10 @@ export default function CasesPage() {
         {ACCESS_TABS.map(({ label, value }) => (
           <button
             key={value}
-            onClick={() => { setAccessTab(value); setCurrentPage(0); }}
+            onClick={() => patchFilter({ typeShare: value })}
             className={cn(
               "px-[16px] py-[8px] rounded-[8px] text-[13.5px] font-semibold transition-colors",
-              accessTab === value
+              query.typeShare === value
                 ? "bg-[#1d2c4e] text-white"
                 : "bg-white border border-[#e2e5ec] text-[#6b7388] hover:border-[#c5cbd9] hover:text-[#3a4055]",
             )}
@@ -172,65 +263,72 @@ export default function CasesPage() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-[#9aa1b3]" />
           <input
             type="text"
-            placeholder="Search redacted cases..."
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              resetPage();
-            }}
+            placeholder="사건 제목 또는 담당자 검색..."
+            value={searchInput}
+            onChange={(e) => handleSearchChange(e.target.value)}
             className="w-full pl-[38px] pr-3 py-[10px] border border-[#e2e5ec] rounded-[8px] bg-white text-[13.5px] text-[#3a4055] outline-none focus:border-[#2b3f6c] placeholder:text-[#9aa1b3]"
           />
         </div>
 
         <Select
-          value={searchField}
+          value={query.searchField}
           onValueChange={(v) => {
-            if (v) { setSearchField(v); resetPage(); }
+            if (v) patchFilter({ searchField: v as CaseSearchField });
           }}
         >
           <SelectTrigger className="w-[100px] border-[#e2e5ec] bg-white text-[13.5px] text-[#3a4055] rounded-[8px] h-[42px]">
-            <span>{SEARCH_FIELD_LABELS[searchField]}</span>
+            <span>{SEARCH_FIELD_LABELS[query.searchField]}</span>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="title">제목</SelectItem>
-            <SelectItem value="manager">담당자</SelectItem>
-            <SelectItem value="all">전체 항목</SelectItem>
+            <SelectItem value="TITLE">제목</SelectItem>
+            <SelectItem value="MANAGER">담당자</SelectItem>
+            <SelectItem value="ALL">전체 항목</SelectItem>
           </SelectContent>
         </Select>
 
         <div className="w-px h-[22px] bg-[#e2e5ec]" />
 
         <Select
-          value={statusFilter}
+          value={statusValue}
           onValueChange={(v) => {
-            if (v) { setStatusFilter(v); resetPage(); }
+            if (v) patchFilter({ status: v === "ALL" ? null : (v as CaseStatusFilter) });
           }}
         >
           <SelectTrigger className="w-[100px] border-[#e2e5ec] bg-white text-[13.5px] text-[#3a4055] rounded-[8px] h-[42px]">
-            <span>{STATUS_LABELS[statusFilter]}</span>
+            <span>{STATUS_LABELS[statusValue]}</span>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">전체</SelectItem>
-            <SelectItem value="진행중">진행중</SelectItem>
-            <SelectItem value="사건종료">사건종료</SelectItem>
+            <SelectItem value="ALL">전체</SelectItem>
+            <SelectItem value="OPEN">진행중</SelectItem>
+            <SelectItem value="CLOSED">사건종료</SelectItem>
           </SelectContent>
         </Select>
 
         <Select
-          value={sortOrder}
+          value={query.sort}
           onValueChange={(v) => {
-            if (v) { setSortOrder(v); resetPage(); }
+            if (v) patchFilter({ sort: v as CaseSortOrder });
           }}
         >
           <SelectTrigger className="w-[110px] border-[#e2e5ec] bg-white text-[13.5px] text-[#3a4055] rounded-[8px] h-[42px]">
-            <span>{SORT_LABELS[sortOrder]}</span>
+            <span>{SORT_LABELS[query.sort]}</span>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="latest">최신순</SelectItem>
-            <SelectItem value="oldest">오래된순</SelectItem>
-            <SelectItem value="title">제목순</SelectItem>
+            <SelectItem value="LATEST">최신순</SelectItem>
+            <SelectItem value="OLDEST">오래된순</SelectItem>
+            <SelectItem value="TITLE">제목순</SelectItem>
           </SelectContent>
         </Select>
+      </div>
+
+      {/* 검색·필터가 걸린 상태에서도 전체 몇 건 중 몇 페이지인지 보이게 한다 */}
+      <div className="flex items-center justify-between mb-3 text-[13px] text-[#6b7388]">
+        <span>
+          {isLoading ? "불러오는 중..." : `전체 ${totalElements.toLocaleString()}건`}
+        </span>
+        <span>
+          {uiPage} / {totalPages} 페이지
+        </span>
       </div>
 
       {/* Cards grid */}
@@ -239,61 +337,28 @@ export default function CasesPage() {
           <div className="col-span-4 text-center py-16 text-[#9aa1b3] text-[13.5px]">
             불러오는 중...
           </div>
-        ) : filtered.length === 0 ? (
+        ) : loadFailed ? (
+          <div className="col-span-4 text-center py-16 text-[13.5px]">
+            <p className="text-[#c0392b] mb-3">사건 목록을 불러오지 못했습니다.</p>
+            <button
+              onClick={reload}
+              className="px-[14px] py-[8px] border border-[#e2e5ec] rounded-[6px] bg-white text-[#3a4055] hover:bg-[#f7f8fb] transition-colors"
+            >
+              다시 시도
+            </button>
+          </div>
+        ) : cases.length === 0 ? (
           <div className="col-span-4 text-center py-16 text-[#9aa1b3] text-[13.5px]">
-            조건에 맞는 사건이 없습니다.
+            {hasFilter ? "조건에 맞는 사건이 없습니다." : "등록된 사건이 없습니다."}
           </div>
         ) : (
-          filtered.map((c) => (
-            <CaseCard
-              key={c.id}
-              {...c}
-              onDelete={(deletedId) =>
-                setCases((prev) => prev.filter((x) => x.id !== deletedId))
-              }
-              onUpdate={(updatedId, updated) =>
-                setCases((prev) =>
-                  prev.map((x) => (x.id === updatedId ? { ...x, ...updated } : x)),
-                )
-              }
-            />
+          cases.map((c) => (
+            <CaseCard key={c.id} {...c} onDelete={handleDeleted} onUpdate={handleUpdated} />
           ))
         )}
       </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && <div className="flex items-center justify-center gap-[6px] py-2 pb-4">
-        <button
-          onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
-          disabled={currentPage === 0}
-          className="min-w-[34px] h-[34px] px-[10px] border border-[#e2e5ec] rounded-[6px] bg-white text-[#6b7388] flex items-center justify-center hover:border-[#c5cbd9] hover:bg-[#f7f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          <ChevronLeft size={14} />
-        </button>
-
-        {pageNumbers.map((n) => (
-          <button
-            key={n}
-            onClick={() => setCurrentPage(n - 1)}
-            className={cn(
-              "min-w-[34px] h-[34px] px-[10px] border rounded-[6px] text-[13px] font-medium flex items-center justify-center transition-colors",
-              n === uiPage
-                ? "bg-[#1d2c4e] border-[#1d2c4e] text-white"
-                : "bg-white border-[#e2e5ec] text-[#3a4055] hover:border-[#c5cbd9] hover:bg-[#f7f8fb]",
-            )}
-          >
-            {n}
-          </button>
-        ))}
-
-        <button
-          onClick={() => setCurrentPage((p) => Math.min(totalPages - 1, p + 1))}
-          disabled={currentPage >= totalPages - 1}
-          className="min-w-[34px] h-[34px] px-[10px] border border-[#e2e5ec] rounded-[6px] bg-white text-[#6b7388] flex items-center justify-center hover:border-[#c5cbd9] hover:bg-[#f7f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
-          <ChevronRight size={14} />
-        </button>
-      </div>}
+      <PaginationBar page={uiPage} totalPages={totalPages} onChange={goToPage} />
     </div>
   );
 }

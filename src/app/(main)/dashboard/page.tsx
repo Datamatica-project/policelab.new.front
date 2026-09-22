@@ -88,8 +88,8 @@ export default function DashboardPage() {
       try {
         const [statsData, casesData, sharedData] = await Promise.all([
           GetDashboardStats(),
-          GetCases(0, 10, "ALL"),
-          GetCases(0, 1, "SHARED"),
+          GetCases({ size: 10, typeShare: "ALL" }),
+          GetCases({ size: 1, typeShare: "SHARED" }),
         ]);
         setStats(statsData);
         setCases(casesData.content);

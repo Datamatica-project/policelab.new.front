@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Search, ChevronLeft, ChevronRight, Eye, Download, File, Film, FileText, X, Check, Loader2 } from "lucide-react";
+import { Search, Eye, Download, File, Film, FileText, X, Check, Loader2 } from "lucide-react";
+import PaginationBar from "@/components/common/PaginationBar";
 import { cn } from "@/lib/utils";
 import {
   Select,
@@ -371,11 +372,6 @@ export default function CaseFilesPage() {
   const page = Math.min(currentPage, totalPages);
   const pageFiles = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
 
-  const pageNumbers = useMemo(() => {
-    const count = Math.min(10, totalPages);
-    const start = Math.max(1, Math.min(page - 4, totalPages - count + 1));
-    return Array.from({ length: count }, (_, i) => start + i);
-  }, [page, totalPages]);
 
   const statusLabel = STATUS_MAP[caseDetail?.status ?? ""] ?? "진행중";
 
@@ -654,41 +650,8 @@ export default function CaseFilesPage() {
         )}
       </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-center gap-[6px] py-2 pb-4">
-          <button
-            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-            disabled={page === 1}
-            className="min-w-[34px] h-[34px] px-[10px] border border-[#e2e5ec] rounded-[6px] bg-white text-[#6b7388] flex items-center justify-center hover:border-[#c5cbd9] hover:bg-[#f7f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            <ChevronLeft size={14} />
-          </button>
-
-          {pageNumbers.map((n) => (
-            <button
-              key={n}
-              onClick={() => setCurrentPage(n)}
-              className={cn(
-                "min-w-[34px] h-[34px] px-[10px] border rounded-[6px] text-[13px] font-medium flex items-center justify-center transition-colors",
-                n === page
-                  ? "bg-[#1d2c4e] border-[#1d2c4e] text-white"
-                  : "bg-white border-[#e2e5ec] text-[#3a4055] hover:border-[#c5cbd9] hover:bg-[#f7f8fb]",
-              )}
-            >
-              {n}
-            </button>
-          ))}
-
-          <button
-            onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
-            className="min-w-[34px] h-[34px] px-[10px] border border-[#e2e5ec] rounded-[6px] bg-white text-[#6b7388] flex items-center justify-center hover:border-[#c5cbd9] hover:bg-[#f7f8fb] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-          >
-            <ChevronRight size={14} />
-          </button>
-        </div>
-      )}
+      {/* 페이지가 하나뿐이어도 바는 노출한다 (숨기면 기능 자체가 없는 것처럼 보인다) */}
+      <PaginationBar page={page} totalPages={totalPages} onChange={setCurrentPage} />
 
       {previewFile && (
         <PreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />

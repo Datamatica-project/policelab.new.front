@@ -39,7 +39,7 @@ export default function Sidebar() {
   useEffect(() => {
     if (expanded !== "cases" || hasFetched.current || sidebarCases.length > 0) return;
     hasFetched.current = true;
-    GetCases(0, 10)
+    GetCases({ size: 10 })
       .then((data) =>
         setSidebarCases(data.content.map((c) => ({ id: c.caseId, title: c.title })))
       )
