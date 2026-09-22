@@ -23,6 +23,7 @@ import {
 } from "@/lib/api";
 import type { CaseData, CaseStatus } from "@/lib/case-data";
 import { useCaseStore } from "@/store/caseStore";
+import { toDateOnly } from "@/lib/datetime";
 
 const STATUS_MAP: Record<string, CaseStatus> = {
   OPEN: "진행중",
@@ -37,7 +38,8 @@ function toCaseData(c: CaseResponse): CaseData {
     title: c.title,
     description: c.description ?? "",
     manager: c.assignedTo ?? c.createdBy,
-    date: c.occurredAt ? c.occurredAt.slice(0, 10) : c.createdAt.slice(0, 10),
+    date: toDateOnly(c.occurredAt) || toDateOnly(c.createdAt),
+    occurredAt: c.occurredAt ?? undefined,
     sharedWith: c.sharedWith ?? [],
   };
 }
@@ -332,13 +334,13 @@ export default function CasesPage() {
       </div>
 
       {/* Cards grid */}
-      <div className="grid grid-cols-4 gap-[18px] mb-9">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-[18px] mb-9">
         {isLoading ? (
-          <div className="col-span-4 text-center py-16 text-[#9aa1b3] text-[13.5px]">
+          <div className="col-span-full text-center py-16 text-[#9aa1b3] text-[13.5px]">
             불러오는 중...
           </div>
         ) : loadFailed ? (
-          <div className="col-span-4 text-center py-16 text-[13.5px]">
+          <div className="col-span-full text-center py-16 text-[13.5px]">
             <p className="text-[#c0392b] mb-3">사건 목록을 불러오지 못했습니다.</p>
             <button
               onClick={reload}
@@ -348,7 +350,7 @@ export default function CasesPage() {
             </button>
           </div>
         ) : cases.length === 0 ? (
-          <div className="col-span-4 text-center py-16 text-[#9aa1b3] text-[13.5px]">
+          <div className="col-span-full text-center py-16 text-[#9aa1b3] text-[13.5px]">
             {hasFilter ? "조건에 맞는 사건이 없습니다." : "등록된 사건이 없습니다."}
           </div>
         ) : (

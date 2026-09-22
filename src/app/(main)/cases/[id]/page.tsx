@@ -18,6 +18,7 @@ import { useAuthedImage } from "@/hooks/useAuthedImage";
 import { useVideoSource } from "@/hooks/useVideoSource";
 import { useFileProcessingPoll } from "@/hooks/useFileProcessingPoll";
 import FileProcessingBadge from "@/components/cases/FileProcessingBadge";
+import ConfirmDialog from "@/components/common/ConfirmDialog";
 import { describeFileStatus, isFileViewable } from "@/lib/fileStatus";
 
 const PER_PAGE = 12;
@@ -50,6 +51,15 @@ async function downloadFile(file: FileListResponse) {
 
 /* ── PreviewModal ── */
 function PreviewModal({ file, onClose }: { file: FileListResponse; onClose: () => void }) {
+  // 배경 클릭으로는 닫히는데 ESC 가 안 먹었다. 모달을 닫는 가장 익숙한 키다.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   const isImage = file.type?.startsWith("image");
   const isVideo = file.type?.startsWith("video");
   const viewable = isFileViewable(file.processingStatus);
@@ -306,6 +316,7 @@ export default function CaseFilesPage() {
 
   const [caseDetail, setCaseDetail] = useState<CaseDetailResponse | null>(null);
   const [statusUpdating, setStatusUpdating] = useState(false);
+  const [pendingClose, setPendingClose] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [previewFile, setPreviewFile] = useState<FileListResponse | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -375,10 +386,25 @@ export default function CaseFilesPage() {
 
   const statusLabel = STATUS_MAP[caseDetail?.status ?? ""] ?? "진행중";
 
-  const handleStatusChange = async (label: string | null) => {
+  /**
+   * 종료는 확인을 한 번 받는다. 종료하면 사건 수정과 파일 추가가 막히는데,
+   * 드롭다운 선택 한 번으로 그 상태가 되면 의도치 않게 작업이 잠긴다.
+   * (다시 열 수 있으므로 되돌리기 자체는 가능하다.)
+   */
+  const requestStatusChange = (label: string | null) => {
     if (!label || !caseDetail) return;
     const nextStatus = label === "사건종료" ? "CLOSED" : "OPEN";
     if (nextStatus === caseDetail.status) return;
+
+    if (nextStatus === "CLOSED") {
+      setPendingClose(true);
+      return;
+    }
+    void applyStatusChange("OPEN");
+  };
+
+  const applyStatusChange = async (nextStatus: "OPEN" | "CLOSED") => {
+    if (!caseDetail) return;
     const prevStatus = caseDetail.status;
     setStatusUpdating(true);
     setCaseDetail({ ...caseDetail, status: nextStatus }); // 낙관적 갱신
@@ -397,6 +423,7 @@ export default function CaseFilesPage() {
       );
     } finally {
       setStatusUpdating(false);
+      setPendingClose(false);
     }
   };
 
@@ -589,7 +616,7 @@ export default function CaseFilesPage() {
       {/* Case header */}
       {caseDetail && (
         <div className="flex items-center gap-3 mb-[22px] flex-wrap">
-          <Select value={statusLabel} onValueChange={handleStatusChange} disabled={statusUpdating}>
+          <Select value={statusLabel} onValueChange={requestStatusChange} disabled={statusUpdating}>
             <SelectTrigger
               className={cn(
                 "h-auto w-fit gap-1 rounded-[6px] border-transparent px-[12px] py-[6px] text-[12.5px] font-bold shadow-none focus-visible:ring-0",
@@ -628,13 +655,13 @@ export default function CaseFilesPage() {
       )}
 
       {/* File grid */}
-      <div className="grid grid-cols-4 gap-[22px] mb-9">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-[22px] mb-9">
         {isLoading ? (
-          <div className="col-span-4 text-center py-16 text-[#9aa1b3] text-[13.5px]">
+          <div className="col-span-full text-center py-16 text-[#9aa1b3] text-[13.5px]">
             불러오는 중...
           </div>
         ) : pageFiles.length === 0 ? (
-          <div className="col-span-4 text-center py-16 text-[#9aa1b3] text-[13.5px]">
+          <div className="col-span-full text-center py-16 text-[#9aa1b3] text-[13.5px]">
             {allFiles.length === 0 ? "이 사건에 등록된 파일이 없습니다." : "조건에 맞는 파일이 없습니다."}
           </div>
         ) : (
@@ -652,6 +679,20 @@ export default function CaseFilesPage() {
 
       {/* 페이지가 하나뿐이어도 바는 노출한다 (숨기면 기능 자체가 없는 것처럼 보인다) */}
       <PaginationBar page={page} totalPages={totalPages} onChange={setCurrentPage} />
+
+      {pendingClose && (
+        <ConfirmDialog
+          title="이 사건을 종료할까요?"
+          description={
+            "종료하면 사건 정보 수정과 파일 추가가 막힙니다.\n" +
+            "필요하면 언제든 다시 진행중으로 되돌릴 수 있습니다."
+          }
+          confirmLabel="사건 종료"
+          isPending={statusUpdating}
+          onConfirm={() => applyStatusChange("CLOSED")}
+          onCancel={() => setPendingClose(false)}
+        />
+      )}
 
       {previewFile && (
         <PreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />

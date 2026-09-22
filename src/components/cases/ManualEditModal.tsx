@@ -15,6 +15,28 @@ import { PostMosaic } from "@/lib/api";
 import type { Detection } from "@/lib/api";
 import { saveMosaicFile, loadOriginalFiles } from "@/lib/caseSession";
 
+/**
+ * 퍼센트 좌표를 실제 이미지 픽셀로 바꾼다.
+ *
+ * 화면에 표시되는 "영역 정보"는 사용자가 어디를 가렸는지 확인하는 근거다.
+ * 이미지 크기를 모르는 동안에는 추측값 대신 0 을 돌려주고 화면에서 "—" 로 표시한다.
+ */
+function toImagePixels(
+  xPercent: number,
+  yPercent: number,
+  wPercent: number,
+  hPercent: number,
+  natural: { w: number; h: number } | null,
+): { pxX: number; pxY: number; pxW: number; pxH: number } {
+  if (!natural) return { pxX: 0, pxY: 0, pxW: 0, pxH: 0 };
+  return {
+    pxX: Math.round((xPercent / 100) * natural.w),
+    pxY: Math.round((yPercent / 100) * natural.h),
+    pxW: Math.round((wPercent / 100) * natural.w),
+    pxH: Math.round((hPercent / 100) * natural.h),
+  };
+}
+
 export interface BBox {
   id: number;
   x: number;       // % of stage width
@@ -142,10 +164,15 @@ export default function ManualEditModal({
         y: (draft.y / rect.height) * 100,
         w: (draft.w / rect.width) * 100,
         h: (draft.h / rect.height) * 100,
-        pxX: Math.round(draft.x * (1024 / rect.width)),
-        pxY: Math.round(draft.y * (1024 / rect.height)),
-        pxW: Math.round(draft.w * (1024 / rect.width)),
-        pxH: Math.round(draft.h * (1024 / rect.height)),
+        // 1024 를 하드코딩하면 실제 이미지와 무관한 좌표가 표시된다
+        // (320×240 이미지에서 절반 크기 박스가 406×405 로 나왔다).
+        ...toImagePixels(
+          (draft.x / rect.width) * 100,
+          (draft.y / rect.height) * 100,
+          (draft.w / rect.width) * 100,
+          (draft.h / rect.height) * 100,
+          naturalSize,
+        ),
         source: "manual",
       };
       commitBoxes([...boxes, box]);
@@ -182,10 +209,13 @@ export default function ManualEditModal({
     }
     if (!fileId) { toast.error("파일 정보가 없습니다."); return; }
     if (!originalFile) { toast.error("원본 이미지를 불러올 수 없습니다."); return; }
+    // 이미지 크기를 모른 채 1024 로 가정하면 엉뚱한 영역이 가려진다.
+    // 비식별화 정확성이 걸린 곳이라 추측하지 않고 막는다.
+    if (!naturalSize) { toast.error("이미지 크기를 확인하는 중입니다. 잠시 후 다시 시도해주세요."); return; }
     setIsApplying(true);
     try {
-      const nw = naturalSize?.w ?? 1024;
-      const nh = naturalSize?.h ?? 1024;
+      const nw = naturalSize.w;
+      const nh = naturalSize.h;
       const scaledBoxes: number[][] = boxes.map((b) => [
         Math.round((b.x / 100) * nw),
         Math.round((b.y / 100) * nh),
@@ -207,12 +237,13 @@ export default function ManualEditModal({
     ? (() => {
         const r = stageRef.current?.getBoundingClientRect();
         if (!r) return null;
-        return {
-          pxX: Math.round(draft.x * (1024 / r.width)),
-          pxY: Math.round(draft.y * (1024 / r.height)),
-          pxW: Math.round(draft.w * (1024 / r.width)),
-          pxH: Math.round(draft.h * (1024 / r.height)),
-        };
+        return toImagePixels(
+          (draft.x / r.width) * 100,
+          (draft.y / r.height) * 100,
+          (draft.w / r.width) * 100,
+          (draft.h / r.height) * 100,
+          naturalSize,
+        );
       })()
     : lastBox ?? null;
   const showArea = showBox ? showBox.pxW * showBox.pxH : 0;

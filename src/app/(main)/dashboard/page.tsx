@@ -81,19 +81,28 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [cases, setCases] = useState<CaseResponse[]>([]);
   const [sharedCount, setSharedCount] = useState(0);
+  const [openCount, setOpenCount] = useState(0);
+  const [closedCount, setClosedCount] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const [statsData, casesData, sharedData] = await Promise.all([
+        // 건수는 받아온 목록을 세지 않고 서버의 totalElements 를 쓴다.
+        // 목록은 최근 사건 표시용이라 size 만큼만 오므로, 세어 보면 그 페이지 크기가
+        // 그대로 "진행중 사건" 수가 돼버린다 (21건이어도 10으로 표시됐다).
+        const [statsData, recentData, sharedData, openData, closedData] = await Promise.all([
           GetDashboardStats(),
           GetCases({ size: 10, typeShare: "ALL" }),
           GetCases({ size: 1, typeShare: "SHARED" }),
+          GetCases({ size: 1, typeShare: "OWNED", status: "OPEN" }),
+          GetCases({ size: 1, typeShare: "OWNED", status: "CLOSED" }),
         ]);
         setStats(statsData);
-        setCases(casesData.content);
-        setSharedCount(sharedData.totalElements ?? 0);
+        setCases(recentData.content);
+        setSharedCount(sharedData.totalElements);
+        setOpenCount(openData.totalElements);
+        setClosedCount(closedData.totalElements);
       } catch {
         // 개별 실패는 빈 상태로 처리
       } finally {
@@ -102,9 +111,6 @@ export default function DashboardPage() {
     };
     load();
   }, []);
-
-  const openCount = cases.filter((c) => c.status === "OPEN" && c.accessType === "OWNED").length;
-  const closedCount = cases.filter((c) => c.status === "CLOSED" && c.accessType === "OWNED").length;
 
   const uploadDiff = stats
     ? stats.todayUploadCount - stats.yesterdayUploadCount
@@ -147,7 +153,7 @@ export default function DashboardPage() {
       </p>
 
       {/* 요약 카드 */}
-      <div className="grid grid-cols-4 gap-[18px] mb-[22px]">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-[18px] mb-[22px]">
         <StatCard
           icon={Folder}
           label="진행중 사건"
@@ -183,7 +189,7 @@ export default function DashboardPage() {
       </div>
 
       {/* 차트 행 */}
-      <div className="grid grid-cols-5 gap-[18px] mb-[22px]">
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-5 gap-[18px] mb-[22px]">
         {/* 주간 업로드 추이 */}
         <div className="col-span-3 bg-white border border-[#e6e8ef] rounded-[10px] p-[22px]">
           <h2 className="text-[15px] font-bold text-[#1f2330] mb-[18px]">
@@ -258,7 +264,7 @@ export default function DashboardPage() {
       </div>
 
       {/* 최근 사건 + 새 사건 생성 */}
-      <div className="grid grid-cols-4 gap-[18px] items-start">
+      <div className="grid grid-cols-1 xl:grid-cols-4 gap-[18px] items-start">
 
       {/* 최근 사건 목록 */}
       <div className="col-span-3 bg-white border border-[#e6e8ef] rounded-[10px] p-[22px]">

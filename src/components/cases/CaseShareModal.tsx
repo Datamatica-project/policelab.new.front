@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { X, Search, UserPlus, Check } from "lucide-react";
 import { toast } from "sonner";
+import { getApiErrorMessage } from "@/lib/apiError";
 import { GetUserList, ShareCase, type UserResponse } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 
@@ -87,8 +88,8 @@ export default function CaseShareModal({
       toast.success(`${usernames.length}명에게 사건이 공유됐습니다.`);
       onShared?.(usernames);
       onClose();
-    } catch {
-      toast.error("사건 공유에 실패했습니다.");
+    } catch (e) {
+      toast.error(getApiErrorMessage(e, "사건 공유에 실패했습니다."));
     } finally {
       setIsSaving(false);
     }

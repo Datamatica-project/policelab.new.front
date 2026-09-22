@@ -20,6 +20,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { toLocalDateTimeString } from "@/lib/datetime";
 import { toast } from "sonner";
 import { ApiClient, PostCase, PostFiles, PostReplace, GetUserList, CheckCaseNumberExists, toFileApiPath, type FileUploadResult, type Detection, type ReplaceFileResult, type UserResponse } from "@/lib/api";
 import AuthedImage from "@/components/common/AuthedImage";
@@ -41,12 +42,16 @@ import VideoManualEditModal from "@/components/cases/VideoManualEditModal";
 import VideoResultPanel from "@/components/cases/VideoResultPanel";
 import Step3Complete from "@/components/cases/Step3Complete";
 import { isFileViewable } from "@/lib/fileStatus";
+import { formatFileSize, toMegabytes } from "@/lib/filesize";
+import { getApiErrorMessage } from "@/lib/apiError";
 
 /* ─────────────────── types ─────────────────── */
 interface UploadedFile {
   id: number;
   file: File | null; // null while loading from IndexedDB after page refresh
   name: string;
+  /** 표시용 원본 바이트. MB 로만 들고 있으면 작은 파일이 0 으로 뭉개진다. */
+  sizeBytes: number;
   sizeMB: number;
   seed: number;
   category: string;
@@ -758,7 +763,7 @@ function Step3Side({
                   <p className={cn("text-[13px] font-semibold truncate", isSelected ? "text-[#1d2c4e]" : "text-[#1f2330]")}>
                     {f.uploadResult?.originalFileName ?? f.name}
                   </p>
-                  <p className="text-[11.5px] text-[#9aa1b3] mt-[1px]">{f.sizeMB} MB</p>
+                  <p className="text-[11.5px] text-[#9aa1b3] mt-[1px]">{formatFileSize(f.sizeBytes)}</p>
                 </div>
                 {/* 선택 표시 */}
                 {isSelected && (
@@ -863,7 +868,7 @@ export default function NewCasePage() {
   // 알려 주지 않으면 파일이 다시 처리 중으로 돌아간 것을 화면이 모른다.
   const [videoReloadKey, setVideoReloadKey] = useState(0);
 
-  const totalSize = useMemo(() => files.reduce((s, f) => s + f.sizeMB, 0), [files]);
+  const totalBytes = useMemo(() => files.reduce((s, f) => s + f.sizeBytes, 0), [files]);
 
   const selectedFile = useMemo(
     () => (selectedFileId ? files.find((f) => f.id === selectedFileId) : null) ?? files[0] ?? null,
@@ -875,6 +880,13 @@ export default function NewCasePage() {
     const session = loadCaseSession();
     if (!session) return;
 
+    // 완료(4단계)까지 끝난 세션은 이어서 할 일이 없다. 복원해 버리면 새 사건을
+    // 만들려고 들어온 사용자가 이전 사건의 완료 화면에 갇힌다 (빠져나갈 버튼도 없다).
+    if (session.step >= 4) {
+      clearCaseSession();
+      return;
+    }
+
     setCaseNumber(session.caseNumber);
     setCaseName(session.caseName);
     setAssignedTo(session.assignedTo ?? "");
@@ -883,7 +895,12 @@ export default function NewCasePage() {
     setCreatedCaseId(session.caseId);
     setReviewedBoxes((session.reviewedBoxes as Record<number, BBox[]>) ?? {});
 
-    const restoredFiles: UploadedFile[] = session.files.map((f) => ({ ...f, file: null }));
+    // sizeBytes 가 없는 이전 세션은 sizeMB 로 역산해 채운다
+    const restoredFiles: UploadedFile[] = session.files.map((f) => ({
+      ...f,
+      sizeBytes: f.sizeBytes ?? Math.round(f.sizeMB * 1024 * 1024),
+      file: null,
+    }));
     setFiles(restoredFiles);
     setSelectedFileId(restoredFiles[0]?.id ?? null);
     if (session.replaceResults) setReplaceResults(session.replaceResults);
@@ -934,8 +951,8 @@ export default function NewCasePage() {
       assignedTo,
       assignedToName,
       desc,
-      files: files.map(({ id, name, sizeMB, seed, category, tags, policy, description, uploadResult }) => ({
-        id, name, sizeMB, seed, category, tags, policy, description, uploadResult,
+      files: files.map(({ id, name, sizeBytes, sizeMB, seed, category, tags, policy, description, uploadResult }) => ({
+        id, name, sizeBytes, sizeMB, seed, category, tags, policy, description, uploadResult,
       })),
       reviewedBoxes,
       replaceResults,
@@ -965,9 +982,10 @@ export default function NewCasePage() {
     };
   }, [caseNumber]);
 
-  const isStep2Ready =
-    files.length > 0 &&
-    files.every((f) => f.category && f.policy);
+  // 파일은 선택이다. 사건을 먼저 접수하고 증거는 나중에 올리는 흐름을 막지 않는다
+  // (API 도 빈 사건을 허용한다). 다만 올린 파일은 분류가 끝나 있어야 한다.
+  const isStep2Ready = files.every((f) => f.category && f.policy);
+  const hasFiles = files.length > 0;
 
   const addFiles = (rawFiles: File[]) => {
     setFiles((prev) => [
@@ -976,7 +994,10 @@ export default function NewCasePage() {
         id: Date.now() + i,
         file: f,
         name: f.name,
-        sizeMB: +(f.size / (1024 * 1024)).toFixed(1) || 1.0,
+        sizeBytes: f.size,
+        // `|| 1.0` 폴백이 있었다. 0.0 으로 반올림된 작은 파일이 falsy 라서
+        // 1KB 짜리가 1MB 로 표시되고, 완료 화면의 용량 변화가 -100% 로 나왔다.
+        sizeMB: toMegabytes(f.size),
         seed: prev.length + i,
         category: "",
         tags: [],
@@ -1043,7 +1064,9 @@ export default function NewCasePage() {
         caseNumber,
         title: caseName,
         description: desc,
-        occurredAt: new Date().toISOString().slice(0, 19),
+        // toISOString() 은 UTC 라 KST 기준 9시간 과거로 저장된다.
+        // 서버 필드가 타임존 없는 LocalDateTime 이므로 현지 벽시계 시각을 보낸다.
+        occurredAt: toLocalDateTimeString(new Date()),
         assignedTo,
       });
 
@@ -1105,9 +1128,10 @@ export default function NewCasePage() {
         files.map((f) => ({ id: f.id, file: f.file as File })),
       );
 
-      setStep(3);
-    } catch {
-      toast.error("사건 생성에 실패했습니다. 다시 시도해주세요.");
+      // 파일이 없으면 검수(3단계)할 대상이 없다. 바로 완료로 보낸다.
+      setStep(updatedFiles.length > 0 ? 3 : 4);
+    } catch (e) {
+      toast.error(getApiErrorMessage(e, "사건 생성에 실패했습니다. 다시 시도해주세요."));
     } finally {
       setIsCreating(false);
     }
@@ -1288,7 +1312,7 @@ export default function NewCasePage() {
                 {isCreating && (
                   <span className="w-4 h-4 border-2 border-[#9aa1b3] border-t-transparent rounded-full animate-spin" />
                 )}
-                {isCreating ? "생성 중..." : "사건 생성"}
+                {isCreating ? "생성 중..." : hasFiles ? "사건 생성" : "파일 없이 사건 생성"}
               </button>
             </>
           )}
@@ -1549,7 +1573,7 @@ export default function NewCasePage() {
                   <CloudUpload size={20} />
                 </div>
                 <p className="text-[14px] font-medium text-[#3a4055] mb-[6px]">파일을 드래그하거나 클릭하여 업로드</p>
-                <p className="text-[12.5px] text-[#9aa1b3]">JPG, PNG 지원 (최대 2GB)</p>
+                <p className="text-[12.5px] text-[#9aa1b3]">이미지(JPG, PNG 등) · 영상(MP4 등) 지원 · 파일당 최대 2GB</p>
               </div>
             </div>
 
@@ -1690,7 +1714,7 @@ export default function NewCasePage() {
                           <div className="flex-1 min-w-0">
                             <p className="text-[13.5px] font-bold text-[#1d2c4e] truncate">{f.name}</p>
                             <p className="text-[12px] text-[#6b7388] mt-0.5">
-                              {f.sizeMB}MB
+                              {formatFileSize(f.sizeBytes)}
                               {isCreating && uploadProgress[f.id] != null && ` · 업로드 ${uploadProgress[f.id]}%`}
                             </p>
                           </div>
@@ -1821,7 +1845,7 @@ export default function NewCasePage() {
                 { k: "생성 날짜", v: TODAY },
                 { k: "사건 담당자", v: assignedToName || "—" },
                 { k: "파일 개수", v: `${files.length}개` },
-                { k: "총 용량", v: `${totalSize.toFixed(1)}MB` },
+                { k: "총 용량", v: formatFileSize(totalBytes) },
                 { k: "사건 설명", v: desc || "—" },
               ].map(({ k, v }) => (
                 <div key={k} className="grid text-[13.5px] py-[10px] border-b border-[#f0f1f5] last:border-b-0" style={{ gridTemplateColumns: "110px 1fr" }}>

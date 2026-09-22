@@ -7,7 +7,13 @@ export interface CaseData {
   title: string;
   description: string;
   manager: string;
+  /** 목록 카드에 찍는 YYYY-MM-DD */
   date: string;
+  /**
+   * 서버가 준 발생일시 원본 (YYYY-MM-DDTHH:mm:ss, 현지 벽시계 시각).
+   * date 는 날짜만 남은 값이라 수정 화면에서 쓰면 시각이 지워진다.
+   */
+  occurredAt?: string;
   sharedWith?: string[];
 }
 

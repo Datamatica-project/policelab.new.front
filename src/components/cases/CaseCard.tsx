@@ -13,9 +13,11 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { DeleteCase } from "@/lib/api";
+import { getApiErrorMessage } from "@/lib/apiError";
 import CaseStatusBadge from "./CaseStatusBadge";
 import CaseEditModal from "./CaseEditModal";
 import CaseShareModal from "./CaseShareModal";
+import ConfirmDialog from "@/components/common/ConfirmDialog";
 import type { CaseData } from "@/lib/case-data";
 
 interface CaseCardProps extends CaseData {
@@ -32,6 +34,7 @@ export default function CaseCard({
   description,
   manager,
   date,
+  occurredAt,
   sharedWith = [],
   selected,
   onDelete,
@@ -42,6 +45,10 @@ export default function CaseCard({
   const [editOpen, setEditOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+
+  /** 종결된 사건은 서버가 수정·파일 추가를 거부한다 */
+  const isClosed = status === "사건종료";
   const [currentSharedWith, setCurrentSharedWith] =
     useState<string[]>(sharedWith);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -57,16 +64,24 @@ export default function CaseCard({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [menuOpen]);
 
-  const handleDelete = async (e: React.MouseEvent) => {
+  // 삭제는 확인 창을 거친다. 메뉴 항목이 곧바로 삭제로 이어지면
+  // 바로 위 "사건 수정" 을 누르려다 오클릭 한 번에 사건과 파일이 사라진다.
+  const askDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
     setMenuOpen(false);
+    setConfirmDeleteOpen(true);
+  };
+
+  const handleDelete = async () => {
     setIsDeleting(true);
     try {
       await DeleteCase(id);
       toast.success("사건이 삭제됐습니다.");
+      setConfirmDeleteOpen(false);
       onDelete?.(id);
-    } catch {
-      toast.error("사건 삭제에 실패했습니다.");
+    } catch (e) {
+      // 서버가 준 사유(권한 없음, 종결된 사건 등)를 그대로 보여준다
+      toast.error(getApiErrorMessage(e, "사건 삭제에 실패했습니다."));
     } finally {
       setIsDeleting(false);
     }
@@ -113,19 +128,29 @@ export default function CaseCard({
                   <Share2 size={13} />
                   사건 공유
                 </button>
+                {/* 종결된 사건은 서버가 수정을 거부한다. 눌러도 실패할 항목을
+                    그대로 열어 두면 사용자는 원인을 화면에서 알 수 없다. */}
                 <button
+                  disabled={isClosed}
+                  title={isClosed ? "종결된 사건은 수정할 수 없습니다. 먼저 사건을 다시 열어주세요." : undefined}
                   onClick={(e) => {
                     e.stopPropagation();
+                    if (isClosed) return;
                     setMenuOpen(false);
                     setEditOpen(true);
                   }}
-                  className="w-full flex items-center gap-[8px] px-[12px] py-[8px] text-[13px] text-[#3a4055] font-medium hover:bg-[#f3f4f8] transition-colors cursor-pointer rounded-[6px]"
+                  className={cn(
+                    "w-full flex items-center gap-[8px] px-[12px] py-[8px] text-[13px] font-medium transition-colors rounded-[6px]",
+                    isClosed
+                      ? "text-[#b6bbc9] cursor-not-allowed"
+                      : "text-[#3a4055] hover:bg-[#f3f4f8] cursor-pointer",
+                  )}
                 >
                   <Pencil size={13} />
                   사건 수정
                 </button>
                 <button
-                  onClick={handleDelete}
+                  onClick={askDelete}
                   className="w-full flex items-center gap-[8px] px-[12px] py-[8px] text-[13px] text-[#d33b3b] font-medium hover:bg-[#fff1f1] transition-colors cursor-pointer rounded-[6px]"
                 >
                   <Trash2 size={13} />
@@ -182,6 +207,19 @@ export default function CaseCard({
         </div>
       </div>
 
+      {confirmDeleteOpen && (
+        <ConfirmDialog
+          title="이 사건을 삭제할까요?"
+          description={`${caseNumber} · ${title}
+사건에 포함된 파일도 함께 목록에서 사라지며, 화면에서 되돌릴 수 없습니다.`}
+          confirmLabel="삭제"
+          destructive
+          isPending={isDeleting}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmDeleteOpen(false)}
+        />
+      )}
+
       {editOpen && (
         <CaseEditModal
           caseData={{
@@ -192,6 +230,9 @@ export default function CaseCard({
             description,
             manager,
             date,
+            // 수정 모달은 시각까지 필요하다. date 는 날짜만 남은 값이라
+            // 이걸 빠뜨리면 저장할 때마다 시각이 자정으로 지워진다.
+            occurredAt,
           }}
           onClose={() => setEditOpen(false)}
           onUpdate={(updated) => {

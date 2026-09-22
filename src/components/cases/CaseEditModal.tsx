@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { toast } from "sonner";
 import { UpdateCase } from "@/lib/api";
+import { getApiErrorMessage } from "@/lib/apiError";
+import { fromDateTimeLocalInput, toDateOnly, toDateTimeLocalInput } from "@/lib/datetime";
+import AssigneePicker from "@/components/common/AssigneePicker";
 import type { CaseData } from "@/lib/case-data";
 
 interface CaseEditModalProps {
@@ -19,8 +22,10 @@ export default function CaseEditModal({
 }: CaseEditModalProps) {
   const [title, setTitle] = useState(caseData.title);
   const [description, setDescription] = useState(caseData.description);
+  // caseData.date 는 날짜만 남은 값이라 여기서 쓰면 시각이 매번 자정으로 지워진다.
+  // 서버가 준 occurredAt 원본을 그대로 쓴다.
   const [occurredAt, setOccurredAt] = useState(
-    caseData.date ? `${caseData.date}T00:00` : "",
+    toDateTimeLocalInput(caseData.occurredAt ?? caseData.date),
   );
   const [assignedTo, setAssignedTo] = useState(caseData.manager);
   const [isSaving, setIsSaving] = useState(false);
@@ -46,7 +51,9 @@ export default function CaseEditModal({
       await UpdateCase(caseData.id, {
         title: title.trim(),
         description: description.trim(),
-        occurredAt: occurredAt ? new Date(occurredAt).toISOString() : undefined,
+        // 서버 필드는 타임존 없는 LocalDateTime 이다. toISOString() 으로 UTC 로
+        // 바꿔 보내면 저장할 때마다 KST 만큼 과거로 밀린다.
+        occurredAt: fromDateTimeLocalInput(occurredAt),
         assignedTo: assignedTo.trim() || undefined,
       });
       toast.success("사건 정보가 수정됐습니다.");
@@ -54,11 +61,14 @@ export default function CaseEditModal({
         title: title.trim(),
         description: description.trim(),
         manager: assignedTo.trim(),
-        date: occurredAt ? occurredAt.slice(0, 10) : caseData.date,
+        occurredAt: fromDateTimeLocalInput(occurredAt),
+        date: toDateOnly(occurredAt) || caseData.date,
       });
       onClose();
-    } catch {
-      toast.error("사건 수정에 실패했습니다.");
+    } catch (e) {
+      // 예: "종결된 사건에는 파일을 추가하거나 수정할 수 없습니다" — 사용자가
+      // 사건을 다시 열어야 한다는 걸 알 수 있어야 한다.
+      toast.error(getApiErrorMessage(e, "사건 수정에 실패했습니다."));
     } finally {
       setIsSaving(false);
     }
@@ -134,12 +144,9 @@ export default function CaseEditModal({
             <label className="text-[13px] font-semibold text-[#3a4055]">
               담당자 <span className="text-[#9aa1b3] font-normal">(선택)</span>
             </label>
-            <input
-              value={assignedTo}
-              onChange={(e) => setAssignedTo(e.target.value)}
-              className="w-full px-[12px] py-[10px] border border-[#d9deea] rounded-[8px] text-[13.5px] text-[#1f2330] outline-none focus:border-[#1d2c4e] placeholder:text-[#9aa1b3] transition-colors"
-              placeholder="담당자를 입력하세요"
-            />
+            {/* 자유 입력이면 오타가 그대로 저장된다. 담당자는 수정·종료 권한의
+                판정 기준이라 등록된 사용자 중에서만 고르게 한다. */}
+            <AssigneePicker value={assignedTo} onChange={setAssignedTo} />
           </div>
 
           {/* 버튼 */}

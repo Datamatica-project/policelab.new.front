@@ -28,6 +28,41 @@ ApiClient.interceptors.request.use((config) => {
   return config;
 });
 
+/**
+ * 진행 중인 재발급 요청. 여러 요청이 동시에 401 을 받아도 재발급은 한 번만 나간다.
+ *
+ * 화면 하나가 API 를 3개씩 병렬로 부르므로, 요청마다 재발급하면 refresh 가 3번 날아간다.
+ * 서버는 리프레시 토큰 만료 1시간 전부터 토큰을 회전시키는데, 그 구간에 동시 요청이
+ * 겹치면 첫 요청만 성공하고 나머지는 REFRESH_TOKEN_NOT_FOUND 를 받아 작업 중에
+ * 로그아웃된다.
+ */
+let refreshInFlight: Promise<string> | null = null;
+
+function refreshAccessToken(): Promise<string> {
+  if (!refreshInFlight) {
+    refreshInFlight = ApiClient.get("/api/auth/refresh")
+      .then((response) => {
+        const { accessToken, email } = response.data.data;
+        getAuthStore?.().login(accessToken, email);
+        ApiClient.defaults.headers.common["Authorization"] = `Bearer ${accessToken}`;
+        return accessToken as string;
+      })
+      .finally(() => {
+        // 성공이든 실패든 다음 401 은 새로 재발급을 시도할 수 있어야 한다
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
+/** 재발급 실패 시 세션 정리. 동시에 여러 요청이 실패해도 한 번만 이동한다. */
+function endSession() {
+  getAuthStore?.().logout();
+  if (typeof window !== "undefined" && window.location.pathname !== "/login") {
+    window.location.href = "/login";
+  }
+}
+
 ApiClient.interceptors.response.use(
   (response) => response,
   async (error: unknown) => {
@@ -52,21 +87,14 @@ ApiClient.interceptors.response.use(
       originalRequest._retry = true;
 
       try {
-        const response = await ApiClient.get("/api/auth/refresh");
-        const { accessToken, email } = response.data.data;
-
-        getAuthStore?.().login(accessToken, email);
-        ApiClient.defaults.headers.common["Authorization"] = `Bearer ${accessToken}`;
+        const accessToken = await refreshAccessToken();
         originalRequest.headers!["Authorization"] = `Bearer ${accessToken}`;
 
         return ApiClient(originalRequest as Parameters<typeof ApiClient>[0]);
       } catch {
         // 재발급 실패 = 세션 만료. 인메모리 토큰을 비우고,
         // (백엔드가 refreshToken 쿠키를 이미 제거하므로) 로그인 페이지로 이동한다.
-        getAuthStore?.().logout();
-        if (typeof window !== "undefined" && window.location.pathname !== "/login") {
-          window.location.href = "/login";
-        }
+        endSession();
         return Promise.reject(error);
       }
     }

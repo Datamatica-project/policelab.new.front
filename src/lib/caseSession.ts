@@ -9,6 +9,8 @@ const IDB_VERSION = 1;
 export interface SessionFile {
   id: number;
   name: string;
+  /** 원본 바이트. 이 필드가 생기기 전 세션에는 없어 optional 이다. */
+  sizeBytes?: number;
   sizeMB: number;
   seed: number;
   category: string;
