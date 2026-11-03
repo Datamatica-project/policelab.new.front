@@ -44,6 +44,13 @@ import Step3Complete from "@/components/cases/Step3Complete";
 import { isFileViewable } from "@/lib/fileStatus";
 import { formatFileSize, toMegabytes } from "@/lib/filesize";
 import { getApiErrorMessage } from "@/lib/apiError";
+import {
+  INTERNAL_POLICY,
+  INTERNAL_STORAGE_LIMIT_LABEL,
+  INTERNAL_STORAGE_LIMIT_MESSAGE,
+  INTERNAL_STORAGE_MAX_BYTES,
+  exceedsInternalStorageLimit,
+} from "@/lib/internalStorage";
 
 /* ─────────────────── types ─────────────────── */
 interface UploadedFile {
@@ -83,7 +90,12 @@ const CATEGORY_OPTIONS = [
 
 const POLICY_OPTIONS = [
   { value: "standard", label: "표준 보관", desc: "외부 클라우드(S3)에 저장", Icon: CloudUpload },
-  { value: "internal", label: "내부 보관", desc: "내부 서버(NAS)에 안전하게 저장", Icon: Server },
+  {
+    value: INTERNAL_POLICY,
+    label: "내부 보관",
+    desc: `내부 서버(NAS)에 안전하게 저장 (현재 파일당 ${INTERNAL_STORAGE_LIMIT_LABEL} 이하)`,
+    Icon: Server,
+  },
 ];
 
 const CLASS_LABELS: Record<string, string> = {
@@ -1057,6 +1069,15 @@ export default function NewCasePage() {
   };
 
   const goToStep3 = async () => {
+    // 사건을 만든 뒤 업로드가 413 으로 실패하면 빈 사건만 남는다. 생성 전에 막는다.
+    const oversized = files.filter((f) => exceedsInternalStorageLimit(f.policy, f.sizeBytes));
+    if (oversized.length > 0) {
+      toast.error(
+        `${INTERNAL_STORAGE_LIMIT_MESSAGE} 표준 보관으로 바꾸거나 파일을 줄여주세요: ${oversized.map((f) => f.name).join(", ")}`,
+      );
+      return;
+    }
+
     setIsCreating(true);
     setUploadProgress({});
     try {
@@ -1074,9 +1095,10 @@ export default function NewCasePage() {
       setCreatedCaseId(caseId);
 
       // S3 대상 파일은 Vercel 프록시를 거치지 않는 presigned 직접 업로드로,
-      // NAS 대상 파일은 (직접 업로드 방식이 없으므로) 기존 멀티파트 경로 그대로 보낸다.
-      const s3Files = files.filter((f) => f.policy !== "internal");
-      const nasFiles = files.filter((f) => f.policy === "internal");
+      // NAS 대상 파일은 (직접 업로드 방식이 없으므로) 기존 멀티파트 경로로 보내되,
+      // Vercel 본문 제한에 걸리지 않도록 파일 하나씩 나눠 보낸다 (lib/internalStorage).
+      const s3Files = files.filter((f) => f.policy !== INTERNAL_POLICY);
+      const nasFiles = files.filter((f) => f.policy === INTERNAL_POLICY);
 
       const directTasks: DirectUploadTask[] = s3Files.map((f) => ({
         id: f.id,
@@ -1090,18 +1112,20 @@ export default function NewCasePage() {
         uploadFilesDirect(caseId, directTasks, (id, pct) =>
           setUploadProgress((prev) => ({ ...prev, [id]: pct })),
         ),
-        nasFiles.length > 0
-          ? PostFiles(
-              nasFiles.map((f) => f.file as File),
-              nasFiles.map((f) => ({
+        Promise.all(
+          nasFiles.map((f) =>
+            PostFiles(
+              [f.file as File],
+              [{
                 storageType: "NAS",
                 description: f.description,
                 categoryName: f.category,
                 tags: f.tags,
                 caseId,
-              })),
-            )
-          : Promise.resolve<FileUploadResult[]>([]),
+              }],
+            ).then((results): FileUploadResult | undefined => results[0]),
+          ),
+        ),
       ]);
 
       const failed = directOutcomes.find((o) => o.error);
@@ -1175,22 +1199,32 @@ export default function NewCasePage() {
       const s3Indices: number[] = [];
       const nasIndices: number[] = [];
       targets.forEach((f, i) => {
-        (f.policy === "internal" ? nasIndices : s3Indices).push(i);
+        (f.policy === INTERNAL_POLICY ? nasIndices : s3Indices).push(i);
       });
+
+      // 수동 모자이크 결과는 원본보다 커질 수 있다. 업로드 때 통과했어도 여기서 다시 본다.
+      const oversizedNas = nasIndices.filter((i) => fetchedFiles[i].size > INTERNAL_STORAGE_MAX_BYTES);
+      if (oversizedNas.length > 0) {
+        toast.error(
+          `${INTERNAL_STORAGE_LIMIT_MESSAGE} 편집 결과가 제한을 넘었습니다: ${oversizedNas.map((i) => fetchedFiles[i].name).join(", ")}`,
+        );
+        return;
+      }
 
       const directTasks: DirectReplaceTask[] = s3Indices.map((i) => ({
         id: targets[i].id,
         fileId: targets[i].uploadResult!.fileId,
         file: fetchedFiles[i],
       }));
-      const nasFiles = nasIndices.map((i) => fetchedFiles[i]);
-      const nasMetadata = nasIndices.map((i) => ({ fileId: targets[i].uploadResult!.fileId }));
 
       const [directOutcomes, nasResults] = await Promise.all([
         replaceFilesDirect(directTasks),
-        nasFiles.length > 0
-          ? PostReplace(nasFiles, nasMetadata)
-          : Promise.resolve<ReplaceFileResult[]>([]),
+        Promise.all(
+          nasIndices.map((i) =>
+            PostReplace([fetchedFiles[i]], [{ fileId: targets[i].uploadResult!.fileId }])
+              .then((results): ReplaceFileResult | undefined => results[0]),
+          ),
+        ),
       ]);
 
       const failed = directOutcomes.find((o) => o.error);
@@ -1698,6 +1732,7 @@ export default function NewCasePage() {
                   {files.map((f) => {
                     const isOpen = openFileId === f.id;
                     const isFilled = f.category && f.policy;
+                    const isOversized = exceedsInternalStorageLimit(f.policy, f.sizeBytes);
                     return (
                       <div key={f.id} className="border border-[#e6e8ef] rounded-[8px] overflow-hidden">
                         {/* 파일 헤더 행 */}
@@ -1718,7 +1753,11 @@ export default function NewCasePage() {
                               {isCreating && uploadProgress[f.id] != null && ` · 업로드 ${uploadProgress[f.id]}%`}
                             </p>
                           </div>
-                          {isFilled && (
+                          {isOversized ? (
+                            <span className="shrink-0 text-[11.5px] bg-[#fdeaea] text-[#d33b3b] font-bold px-2 py-[3px] rounded-[5px]">
+                              용량 초과
+                            </span>
+                          ) : isFilled && (
                             <span className="shrink-0 text-[11.5px] bg-[#e3f4ea] text-[#1f7a47] font-bold px-2 py-[3px] rounded-[5px]">
                               입력 완료
                             </span>
@@ -1788,6 +1827,9 @@ export default function NewCasePage() {
                                     <option key={o.value} value={o.value}>{o.label}</option>
                                   ))}
                                 </select>
+                                {isOversized && (
+                                  <p className="text-[11.5px] text-[#d33b3b]">{INTERNAL_STORAGE_LIMIT_MESSAGE}</p>
+                                )}
                               </div>
                             </div>
                             <div className="flex flex-col gap-[6px]">
