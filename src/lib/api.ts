@@ -765,3 +765,52 @@ export const RequestVideoManualCorrection = async (
 ): Promise<void> => {
   await ApiClient.post(`/api/files/${fileId}/anonymize/manual`, { regions, excludedIds });
 };
+
+// ---------------------------------------------------------------------------
+// 관리자 알림 (metadata-service)
+//
+// 경찰 내부망에서는 외부 메신저를 쓸 수 없어, 처리 실패·무결성 이상 같은 관리자 조치
+// 사항을 시스템 안의 알림함으로 보여 준다. 관리자 여부는 서버가 판단한다 — 관리자가
+// 아니면 403 이 오고, 화면은 그걸 보고 알림 버튼을 숨긴다.
+// ---------------------------------------------------------------------------
+
+export type NotificationSeverity = "WARNING" | "CRITICAL";
+
+export interface AdminNotification {
+  id: number;
+  category: string;
+  severity: NotificationSeverity;
+  title: string;
+  message: string | null;
+  details: string | null;
+  /** 대상 파일 ID 또는 파일명 */
+  resource: string | null;
+  sourceService: string | null;
+  createdAt: string;
+  read: boolean;
+  readAt: string | null;
+  readBy: string | null;
+}
+
+const NOTIFICATIONS_PATH = "/api/metadata/notifications";
+
+export const GetUnreadNotificationCount = async (): Promise<number> => {
+  const response = await ApiClient.get(`${NOTIFICATIONS_PATH}/unread-count`);
+  return response.data.data.count as number;
+};
+
+export const GetAdminNotifications = async (
+  params: { unreadOnly?: boolean; page?: number; size?: number } = {},
+): Promise<AdminNotification[]> => {
+  const response = await ApiClient.get(NOTIFICATIONS_PATH, { params });
+  return response.data.data.content as AdminNotification[];
+};
+
+export const MarkNotificationRead = async (id: number): Promise<void> => {
+  await ApiClient.patch(`${NOTIFICATIONS_PATH}/${id}/read`);
+};
+
+export const MarkAllNotificationsRead = async (): Promise<number> => {
+  const response = await ApiClient.patch(`${NOTIFICATIONS_PATH}/read-all`);
+  return response.data.data.updated as number;
+};
