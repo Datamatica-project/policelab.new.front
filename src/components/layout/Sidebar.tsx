@@ -9,6 +9,7 @@ import { useAuthStore } from "@/store/authStore";
 import { useCaseStore } from "@/store/caseStore";
 import { ApiClient, GetCases } from "@/lib/api";
 import { toast } from "sonner";
+import NotificationBell from "./NotificationBell";
 
 const truncate = (str: string, max: number) =>
   str.length > max ? str.slice(0, max) + "…" : str;
@@ -221,6 +222,7 @@ export default function Sidebar() {
 
       {/* User + Logout */}
       <div className="px-3 pb-6 flex flex-col gap-1">
+        <NotificationBell />
         <div className="px-3 py-2 flex items-center gap-2">
           <div className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center text-[11px] font-bold text-white shrink-0">
             {email?.[0]?.toUpperCase() ?? "?"}
